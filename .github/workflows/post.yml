@@ -1,4 +1,6 @@
 name: AIToolNotes Blog Automation
+permissions:
+  contents: write
 
 on:
   schedule:
