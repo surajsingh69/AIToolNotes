@@ -8,8 +8,6 @@ from googleapiclient.discovery import build
 import xml.etree.ElementTree as ET
 
 # === CONFIGURATION ===
-# SECURITY: secrets now come from environment variables, never hardcoded.
-# Set these as GitHub Actions "Secrets" (Settings -> Secrets and variables -> Actions).
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BLOG_ID      = os.environ["BLOG_ID"]
 SCOPES       = ["https://www.googleapis.com/auth/blogger"]
@@ -19,15 +17,11 @@ POSTED_FILE = os.path.join(BASE_DIR, "posted_titles.json")
 TOKEN_FILE  = os.path.join(BASE_DIR, "token.json")
 CREDS_FILE  = os.path.join(BASE_DIR, "credentials.json")
 
-# How many articles to publish per run. Kept deliberately low & original
-# rather than high-volume — see note on Google's "scaled content abuse"
-# policy in the README. Quality/day matters more than quantity/day.
 MAX_POSTS_PER_RUN = 2
 
 client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# === GOOGLE AUTH ===
 def get_blogger_service():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -36,19 +30,12 @@ def get_blogger_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # NOTE: run_local_server only works on your own machine, once,
-            # to generate token.json the first time. After that, token.json
-            # (stored as a GitHub Secret) is reused headlessly in CI — see README.
             flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
             creds = flow.run_local_server(port=8080, open_browser=True)
         with open(TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
     return build("blogger", "v3", credentials=creds)
 
-# === SOURCE FEEDS: real AI/tool release & product sources, not general news ===
-# These are primary sources about AI tools themselves (release notes, launches,
-# product blogs) — good raw material for genuinely original tutorials/comparisons,
-# unlike generic news headlines which give the LLM nothing to actually report on.
 AI_TOOL_SOURCES = [
     ("https://www.producthunt.com/feed?category=artificial-intelligence", "Product Hunt AI"),
     ("https://openai.com/news/rss.xml", "OpenAI"),
@@ -74,9 +61,6 @@ def get_rss_items(url, source, limit=3):
     return items_out
 
 def fetch_source_article_text(url, max_chars=6000):
-    """Actually fetch and read the source page, not just its headline.
-    This is what lets the LLM write something with real substance instead
-    of hallucinating details around a title it's never seen the body of."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -96,12 +80,11 @@ def collect_topics():
     print(f"\nTotal raw topics: {len(topics)}")
     return topics
 
-# === GENERATE ARTICLE (tutorial/comparison style, grounded in real source text) ===
 def generate_article(topic_title, source_name, source_text):
     print(f"  Writing: {topic_title[:60]}...")
     grounding = source_text if source_text else "(no extra source text available — rely only on the title, and clearly keep claims general)"
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=[{
             "role": "user",
             "content": f"""You are writing an original, SEO-friendly blog article for a tech blog
@@ -132,7 +115,6 @@ Write the full article now:"""
     )
     return response.choices[0].message.content
 
-# === POST TO BLOGGER ===
 def post_to_blogger(service, title, content):
     post = {"kind": "blogger#post", "title": title, "content": content}
     result = service.posts().insert(blogId=BLOG_ID, body=post, isDraft=False).execute()
@@ -140,9 +122,8 @@ def post_to_blogger(service, title, content):
     print(f"  Posted to Blogger: {url}")
     return result, url
 
-# === MAIN ===
 def main():
-    print("TechSansar AI-Tools Blog Automation Starting...")
+    print("AIToolNotes Blog Automation Starting...")
 
     try:
         posted = json.loads(open(POSTED_FILE).read())
