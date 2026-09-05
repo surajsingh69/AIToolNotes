@@ -61,6 +61,9 @@ def get_rss_items(url, source, limit=3):
     return items_out
 
 def fetch_source_article_text(url, max_chars=6000):
+    """Actually fetch and read the source page, not just its headline.
+    This is what lets the LLM write something with real substance instead
+    of hallucinating details around a title it's never seen the body of."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -109,11 +112,17 @@ Requirements:
 - End with a clear, specific takeaway (not generic "in conclusion" filler)
 - Natural, conversational tone, written for a human reader, not for search engines
 - Full HTML formatting ready for blog posting
+- Do NOT wrap your output in markdown code fences (no ``` at the start or end) —
+  output raw HTML only, nothing else
 
 Write the full article now:"""
         }]
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    # Safety net: strip markdown code fences if the model wraps output in one anyway
+    content = re.sub(r'^```(?:html)?\s*\n?', '', content.strip())
+    content = re.sub(r'\n?```\s*$', '', content.strip())
+    return content.strip()
 
 def post_to_blogger(service, title, content):
     post = {"kind": "blogger#post", "title": title, "content": content}
