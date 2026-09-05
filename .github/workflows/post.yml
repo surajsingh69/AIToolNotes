@@ -1,0 +1,42 @@
+name: TechSansar Blog Automation
+
+on:
+  schedule:
+    # Runs at 06:00 UTC daily. Adjust the cron expression to taste.
+    # Cron format: minute hour day month weekday
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}   # lets you also trigger it manually from the Actions tab
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Recreate credential files from secrets
+        run: |
+          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > credentials.json
+          echo "${{ secrets.GOOGLE_TOKEN_JSON }}" > token.json
+
+      - name: Run blog automation
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          BLOG_ID: ${{ secrets.BLOG_ID }}
+        run: python blog_automation.py
+
+      - name: Commit updated posted_titles.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add posted_titles.json
+          git diff --quiet --cached || git commit -m "Update posted titles [skip ci]"
+          git push
