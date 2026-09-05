@@ -119,13 +119,18 @@ Write one of these formats, whichever fits the topic best:
 
 Requirements:
 - 900-1200 words
+- Do NOT start with a title, heading, or restatement of the topic as a first line —
+  Blogger already displays the post title separately, so the body must start
+  directly with the opening paragraph/hook, no duplicate title text anywhere
 - Original analysis and opinion, not a rewrite of the source — add your own
   take on who this is actually useful for and any caveats/limitations
-- Clear H2 headings in HTML
+- Clear H2 headings in HTML for each section, but no H1 and no title line at the top
 - Include one comparison or feature table using HTML <table> tags if relevant
 - End with a clear, specific takeaway (not generic "in conclusion" filler)
 - Natural, conversational tone, written for a human reader, not for search engines
 - Full HTML formatting ready for blog posting
+- Do NOT wrap your output in markdown code fences (no ``` at the start or end) —
+  output raw HTML only, nothing else
 
 Write the full article now:"""
         }]
@@ -134,6 +139,17 @@ Write the full article now:"""
     # Strip markdown code fences if the model wrapped its output in one
     content = re.sub(r'^```(?:html)?\s*\n?', '', content.strip())
     content = re.sub(r'\n?```\s*$', '', content.strip())
+    # Safety net: the model sometimes writes its own title as the very first
+    # line, then immediately repeats it before the real intro paragraph.
+    # Detect an exact duplicated chunk of text (10-200 chars, ignoring tags
+    # in between) right at the start, and drop the first occurrence.
+    dup_pattern = re.compile(r'^\s*(?:<[^>]+>\s*)*([^<]{10,200}?)\s*(?:<[^>]+>\s*)*\1', re.IGNORECASE)
+    m = dup_pattern.match(content)
+    if m:
+        dup_text = m.group(1)
+        second_start = content.find(dup_text, m.start(1) + len(dup_text))
+        if second_start != -1:
+            content = content[second_start:]
     return content.strip()
 
 # === POST TO BLOGGER ===
