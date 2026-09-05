@@ -1,4 +1,4 @@
-name: TechSansar Blog Automation
+   name: AIToolNotes Blog Automation
 
 on:
   schedule:
