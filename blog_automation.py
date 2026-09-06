@@ -8,8 +8,6 @@ from googleapiclient.discovery import build
 import xml.etree.ElementTree as ET
 
 # === CONFIGURATION ===
-# SECURITY: secrets now come from environment variables, never hardcoded.
-# Set these as GitHub Actions "Secrets" (Settings -> Secrets and variables -> Actions).
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BLOG_ID      = os.environ["BLOG_ID"]
 SCOPES       = ["https://www.googleapis.com/auth/blogger"]
@@ -19,10 +17,21 @@ POSTED_FILE = os.path.join(BASE_DIR, "posted_titles.json")
 TOKEN_FILE  = os.path.join(BASE_DIR, "token.json")
 CREDS_FILE  = os.path.join(BASE_DIR, "credentials.json")
 
-# How many articles to publish per run. Kept deliberately low & original
-# rather than high-volume — see note on Google's "scaled content abuse"
-# policy in the README. Quality/day matters more than quantity/day.
 MAX_POSTS_PER_RUN = 2
+INTERNAL_LINKS_PER_POST = 2
+
+# === AFFILIATE LINKS ===
+# Add real affiliate/referral links here once you sign up for each program.
+# Key = lowercase tool name to match in generated content (word-boundary match).
+# Value = your real affiliate URL. Leave empty ("") to skip a tool until you
+# have a real link — the script will never insert a fake/placeholder link.
+AFFILIATE_LINKS = {
+    "notion": "",       # e.g. https://notion.so/affiliates?ref=YOURCODE
+    "jasper": "",       # e.g. https://jasper.ai/?fpr=YOURCODE
+    "murf":   "",       # e.g. https://murf.ai/?via=YOURCODE
+    "synthesia": "",    # e.g. https://synthesia.io/?ref=YOURCODE
+    "customgpt": "",    # e.g. https://customgpt.ai/?ref=YOURCODE
+}
 
 client = Groq(api_key=GROQ_API_KEY)
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -36,19 +45,12 @@ def get_blogger_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # NOTE: run_local_server only works on your own machine, once,
-            # to generate token.json the first time. After that, token.json
-            # (stored as a GitHub Secret) is reused headlessly in CI — see README.
             flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
             creds = flow.run_local_server(port=8080, open_browser=True)
         with open(TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
     return build("blogger", "v3", credentials=creds)
 
-# === SOURCE FEEDS: real AI/tool release & product sources, not general news ===
-# These are primary sources about AI tools themselves (release notes, launches,
-# product blogs) — good raw material for genuinely original tutorials/comparisons,
-# unlike generic news headlines which give the LLM nothing to actually report on.
 AI_TOOL_SOURCES = [
     ("https://www.producthunt.com/feed?category=artificial-intelligence", "Product Hunt AI"),
     ("https://openai.com/news/rss.xml", "OpenAI"),
@@ -74,9 +76,6 @@ def get_rss_items(url, source, limit=3):
     return items_out
 
 def fetch_source_article_text(url, max_chars=6000):
-    """Actually fetch and read the source page, not just its headline.
-    This is what lets the LLM write something with real substance instead
-    of hallucinating details around a title it's never seen the body of."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -96,7 +95,6 @@ def collect_topics():
     print(f"\nTotal raw topics: {len(topics)}")
     return topics
 
-# === GENERATE ARTICLE (tutorial/comparison style, grounded in real source text) ===
 def generate_article(topic_title, source_name, source_text):
     print(f"  Writing: {topic_title[:60]}...")
     grounding = source_text if source_text else "(no extra source text available — rely only on the title, and clearly keep claims general)"
@@ -119,9 +117,12 @@ Write one of these formats, whichever fits the topic best:
 
 Requirements:
 - 900-1200 words
+- The very first sentence must work as a standalone summary of the article
+  (roughly 140-155 characters), since it may be used as the search snippet —
+  make it specific and compelling, not generic
 - Do NOT start with a title, heading, or restatement of the topic as a first line —
   Blogger already displays the post title separately, so the body must start
-  directly with the opening paragraph/hook, no duplicate title text anywhere
+  directly with that opening summary sentence, no duplicate title text anywhere
 - Original analysis and opinion, not a rewrite of the source — add your own
   take on who this is actually useful for and any caveats/limitations
 - Clear H2 headings in HTML for each section, but no H1 and no title line at the top
@@ -136,13 +137,8 @@ Write the full article now:"""
         }]
     )
     content = response.choices[0].message.content
-    # Strip markdown code fences if the model wrapped its output in one
     content = re.sub(r'^```(?:html)?\s*\n?', '', content.strip())
     content = re.sub(r'\n?```\s*$', '', content.strip())
-    # Safety net: the model sometimes writes its own title as the very first
-    # line, then immediately repeats it before the real intro paragraph.
-    # Detect an exact duplicated chunk of text (10-200 chars, ignoring tags
-    # in between) right at the start, and drop the first occurrence.
     dup_pattern = re.compile(r'^\s*(?:<[^>]+>\s*)*([^<]{10,200}?)\s*(?:<[^>]+>\s*)*\1', re.IGNORECASE)
     m = dup_pattern.match(content)
     if m:
@@ -152,7 +148,31 @@ Write the full article now:"""
             content = content[second_start:]
     return content.strip()
 
-# === POST TO BLOGGER ===
+def inject_affiliate_links(content):
+    """Wrap the first mention of each known tool name with its affiliate link,
+    but only for tools that actually have a real URL configured. Never inserts
+    a fake/placeholder link. Skips text already inside an <a> or HTML tag."""
+    for tool, url in AFFILIATE_LINKS.items():
+        if not url:
+            continue
+        pattern = re.compile(r'(?<!["\'>])\b(' + re.escape(tool) + r')\b(?![^<]*</a>)', re.IGNORECASE)
+        def repl(match, url=url):
+            return f'<a href="{url}" rel="nofollow sponsored">{match.group(1)}</a>'
+        content, count = pattern.subn(repl, content, count=1)
+    return content
+
+def inject_internal_links(content, posted_history, current_link):
+    """Append a short 'Related reading' section linking to 1-2 recent posts."""
+    candidates = [p for p in posted_history if isinstance(p, dict) and p.get('post_url') and p.get('link') != current_link]
+    if not candidates:
+        return content
+    picks = candidates[-INTERNAL_LINKS_PER_POST:]
+    links_html = "".join(
+        f'<li><a href="{p["post_url"]}">{p["title"]}</a></li>' for p in picks
+    )
+    related_block = f'<h2>Related reading</h2><ul>{links_html}</ul>'
+    return content + related_block
+
 def post_to_blogger(service, title, content):
     post = {"kind": "blogger#post", "title": title, "content": content}
     result = service.posts().insert(blogId=BLOG_ID, body=post, isDraft=False).execute()
@@ -160,7 +180,6 @@ def post_to_blogger(service, title, content):
     print(f"  Posted to Blogger: {url}")
     return result, url
 
-# === MAIN ===
 def main():
     print("AIToolNotes Blog Automation Starting...")
 
@@ -169,7 +188,6 @@ def main():
     except Exception:
         posted = []
 
-    # Support both old format (list of titles) and new format (list of dicts)
     posted_titles = set()
     posted_links = set()
     for p in posted:
@@ -205,8 +223,10 @@ def main():
         try:
             source_text = fetch_source_article_text(link) if link else ""
             article = generate_article(title, source, source_text)
-            result, url = post_to_blogger(service, title, article)
-            posted.append({"title": title, "link": link})
+            article = inject_affiliate_links(article)
+            article = inject_internal_links(article, posted, link)
+            result, post_url = post_to_blogger(service, title, article)
+            posted.append({"title": title, "link": link, "post_url": post_url})
             open(POSTED_FILE, 'w').write(json.dumps(posted[-500:]))
             time.sleep(3)
         except Exception as e:
