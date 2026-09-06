@@ -100,6 +100,7 @@ def generate_article(topic_title, source_name, source_text):
     grounding = source_text if source_text else "(no extra source text available — rely only on the title, and clearly keep claims general)"
     response = client.chat.completions.create(
         model="openai/gpt-oss-120b",
+        max_tokens=6000,
         messages=[{
             "role": "user",
             "content": f"""You are writing an original, SEO-friendly blog article for a tech blog
@@ -116,7 +117,9 @@ Write one of these formats, whichever fits the topic best:
 - A "best AI tools for [use case]" roundup
 
 Requirements:
-- 900-1200 words
+- 900-1200 words of prose (code blocks/tables don't count toward this, but keep
+  code examples concise and illustrative rather than exhaustive — this article
+  must finish completely, with a real closing takeaway, not cut off partway)
 - The very first sentence must work as a standalone summary of the article
   (roughly 140-155 characters), since it may be used as the search snippet —
   make it specific and compelling, not generic
@@ -137,6 +140,9 @@ Write the full article now:"""
         }]
     )
     content = response.choices[0].message.content
+    finish_reason = response.choices[0].finish_reason
+    if finish_reason == "length":
+        print("  WARNING: generation was cut off by the token limit — article may be incomplete")
     content = re.sub(r'^```(?:html)?\s*\n?', '', content.strip())
     content = re.sub(r'\n?```\s*$', '', content.strip())
     dup_pattern = re.compile(r'^\s*(?:<[^>]+>\s*)*([^<]{10,200}?)\s*(?:<[^>]+>\s*)*\1', re.IGNORECASE)
