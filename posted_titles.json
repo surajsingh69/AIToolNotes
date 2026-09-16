@@ -167,5 +167,15 @@
     "article_type": "news_explainer",
     "commercial_intent": "low",
     "evidence_facts": 9
+  },
+  {
+    "title": "Async GRPO with LoRA across HF Jobs: a bucket, a proxy, and no NCCL",
+    "link": "https://huggingface.co/blog/asyncgrpo-lora-hfjobs",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/09/async-grpo-with-lora-across-hf-jobs.html",
+    "source": "Hugging Face",
+    "quality_score": 9,
+    "article_type": "news_explainer",
+    "commercial_intent": "low",
+    "evidence_facts": 12
   }
 ]
