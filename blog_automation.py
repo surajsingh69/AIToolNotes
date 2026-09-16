@@ -36,14 +36,14 @@ CREDS_FILE = os.path.join(BASE_DIR, "credentials.json")
 MAX_POSTS_PER_RUN = 2
 INTERNAL_LINKS_PER_POST = 2
 
-SOURCE_MAX_CHARS = 14000
+SOURCE_MAX_CHARS = 10000
 MIN_SOURCE_CHARS = 900
 
 MIN_QUALITY_SCORE = 8
 MAX_REWRITE_ATTEMPTS = 1
 
-MAX_SOURCE_FACTS = 18
-MAX_EVIDENCE_CHARS_PER_FACT = 500
+MAX_SOURCE_FACTS = 12
+MAX_EVIDENCE_CHARS_PER_FACT = 300
 
 AFFILIATE_LINKS = {
     "notion": "",
@@ -441,6 +441,40 @@ Rules:
 # ARTICLE GENERATION
 # ---------------------------------------------------------------------------
 
+def compact_writer_context(source_text, editorial_brief, max_source_chars=4500, max_facts=9):
+    """Build a small evidence-first context so Groq requests stay below TPM limits."""
+    ledger = editorial_brief.get("evidence_ledger", [])
+    compact_ledger = []
+    for item in ledger[:max_facts]:
+        if not isinstance(item, dict):
+            continue
+        fact = clean_text(item.get("fact"))
+        evidence = clean_text(item.get("evidence"))
+        confidence = clean_text(item.get("confidence")) or "medium"
+        if fact and evidence:
+            compact_ledger.append({
+                "fact": fact[:350],
+                "evidence": evidence[:300],
+                "confidence": confidence[:20],
+            })
+
+    compact_brief = {
+        "story_summary": editorial_brief.get("story_summary", ""),
+        "reader_problem_or_interest": editorial_brief.get("reader_problem_or_interest", ""),
+        "why_it_matters": editorial_brief.get("why_it_matters", ""),
+        "who_should_care": editorial_brief.get("who_should_care", ""),
+        "useful_angle": editorial_brief.get("useful_angle", ""),
+        "article_type": editorial_brief.get("article_type", "news_explainer"),
+        "search_intent": editorial_brief.get("search_intent", ""),
+        "missing_context": editorial_brief.get("missing_context", [])[:4],
+        "unsupported_claims_to_avoid": editorial_brief.get("unsupported_claims_to_avoid", [])[:6],
+        "evidence_ledger": compact_ledger,
+    }
+
+    source_excerpt = clean_text(source_text or "")[:max_source_chars]
+    return compact_brief, source_excerpt
+
+
 def generate_article(
     topic_title,
     source_name,
@@ -448,90 +482,60 @@ def generate_article(
     editorial_brief,
     revision_feedback=""
 ):
-    ledger = editorial_brief.get("evidence_ledger", [])
+    compact_brief, source_excerpt = compact_writer_context(source_text, editorial_brief)
 
     feedback = ""
     if revision_feedback:
         feedback = f"""
-A previous quality check found these problems. Fix every one:
-
-{revision_feedback}
+Previous quality feedback. Fix these issues without introducing new facts:
+{revision_feedback[:2200]}
 """
 
     prompt = f"""
-Write a genuinely useful AIToolNotes article using ONLY the supplied source
-and evidence ledger.
+Write a genuinely useful AIToolNotes article using ONLY the supplied evidence.
+The evidence ledger defines the factual boundary. Do not use outside knowledge.
 
-This is an evidence-constrained article. The evidence ledger defines the
-maximum factual boundary.
+TITLE: {topic_title}
+SOURCE: {source_name}
 
 EDITORIAL BRIEF:
-{json.dumps(editorial_brief, ensure_ascii=False, indent=2)}
+{json.dumps(compact_brief, ensure_ascii=False, separators=(",", ":"))}
 
-EVIDENCE LEDGER:
-{json.dumps(ledger, ensure_ascii=False, indent=2)}
-
-SOURCE:
-{source_name}
-
-SOURCE TEXT:
+SOURCE EXCERPT:
 <BEGIN_SOURCE>
-{source_text}
+{source_excerpt}
 <END_SOURCE>
 
 {feedback}
 
-Requirements:
-
-- Use only facts supported by the source/evidence ledger.
-- Do NOT use outside knowledge to fill gaps.
-- Do NOT invent or guess any product, model, API, price, date, statistic,
-  benchmark, integration, hardware requirement, partnership, quote, user count,
-  availability status, or technical capability.
-- If the source contains a company claim, attribute it clearly instead of
-  presenting it as independently verified.
-- You may explain implications as analysis, but do not disguise analysis as a
-  sourced fact.
-- If information is missing, say that it is not specified rather than guessing.
-- Do not claim personal testing or experience.
-- Do not manufacture community reactions.
-- Do not pretend a guide is actionable if the source does not provide enough
-  information for the steps.
-- Aim for 900-1200 words when the evidence supports it. Do not pad.
-- The first sentence should immediately explain what matters.
-- Do not repeat the title as the opening.
-- Use useful H2 headings and H3 only when genuinely helpful.
-- Explain unfamiliar terms in plain language.
-- For news/explainers, explain what changed and why it matters.
-- For practical guides, use numbered steps only when the source supports those
-  steps.
-- For comparisons, explain use-case differences without declaring a universal
-  winner.
-- Include limitations or uncertainty when supported.
-- Avoid generic filler such as "in today's rapidly evolving world",
-  "game-changer", "revolutionary", "unlock the power", and "seamlessly".
+Rules:
+- Never invent or guess product names, models, APIs, prices, dates, statistics,
+  benchmarks, integrations, hardware requirements, partnerships, quotes, users,
+  availability, or technical capabilities.
+- Treat promotional statements as claims by the source/company, not independent
+  verification.
+- If a detail is not supported, do not add it.
+- Explain unfamiliar terms plainly and focus on what changed and why it matters.
+- Use H2 headings. Use numbered steps only when the evidence supports them.
+- Avoid generic AI filler and fake personal experience.
+- Aim for 700-950 words when the evidence supports it. Do not pad.
 - End with a concrete takeaway.
-- Output RAW HTML ONLY.
-- No Markdown.
-- No H1.
-- Do not put citations or source links inside the article unless the source
-  itself supplied a link that is explicitly available to the system.
+- Output RAW HTML ONLY. No Markdown, no code fences, no H1.
 """
 
     raw = call_ai([
         {
             "role": "system",
             "content": (
-                "You are the senior writer of a trustworthy technology "
-                "publication. Never cross the supplied evidence boundary."
+                "You are the senior writer of a trustworthy technology publication. "
+                "Stay strictly inside the supplied evidence boundary."
             ),
         },
         {"role": "user", "content": prompt},
-    ], 7000)
+    ], 4000)
 
     raw = re.sub(r"^```(?:html)?\s*", "", raw.strip(), flags=re.I)
     raw = re.sub(r"\s*```$", "", raw)
-
     return raw.strip()
 
 
@@ -621,27 +625,28 @@ def quality_check(
     article_html,
     html_issues
 ):
+    compact_brief, source_excerpt = compact_writer_context(
+        source_text,
+        editorial_brief,
+        max_source_chars=3500,
+        max_facts=9,
+    )
+    article_excerpt = (article_html or "")[:12000]
+
     prompt = f"""
 You are the final evidence and quality editor for AIToolNotes.
+Check whether this article is accurate, useful, and safe to publish using ONLY
+this supplied evidence.
 
-Your most important job is to catch factual claims that are not supported by
-the supplied source/evidence ledger.
+TOPIC: {topic_title}
+SOURCE: {source_name}
 
-ORIGINAL TOPIC:
-{topic_title}
+EDITORIAL BRIEF + EVIDENCE:
+{json.dumps(compact_brief, ensure_ascii=False, separators=(",", ":"))}
 
-SOURCE:
-{source_name}
-
-EDITORIAL BRIEF:
-{json.dumps(editorial_brief, ensure_ascii=False, indent=2)}
-
-EVIDENCE LEDGER:
-{json.dumps(editorial_brief.get("evidence_ledger", []), ensure_ascii=False, indent=2)}
-
-SOURCE TEXT:
+SOURCE EXCERPT:
 <BEGIN_SOURCE>
-{source_text}
+{source_excerpt}
 <END_SOURCE>
 
 DETERMINISTIC HTML ISSUES:
@@ -649,11 +654,10 @@ DETERMINISTIC HTML ISSUES:
 
 ARTICLE HTML:
 <BEGIN_ARTICLE>
-{article_html}
+{article_excerpt}
 <END_ARTICLE>
 
 Return ONLY valid JSON:
-
 {{
   "publish": false,
   "score": 0,
@@ -665,36 +669,24 @@ Return ONLY valid JSON:
 }}
 
 Rules:
-
-1. Check concrete factual claims against the source text and evidence ledger.
-2. A claim is unsupported if the source does not establish it.
-3. Treat numbers, product names, APIs, prices, dates, technical specs,
-   availability, user counts, partnerships, quotes, and performance claims
-   as high-risk claims.
-4. Do not give credit merely because a claim sounds plausible.
-5. Flag claims that are more specific than the available evidence.
-6. Flag invented personal testing, invented user reactions, and fabricated
-   quotes.
-7. Flag misleading certainty where the source only makes a promotional claim.
-8. Check whether the article actually helps the reader.
-9. Check repetition and generic filler.
-10. Check whether the HTML is coherent.
-11. Score 10 exceptional, 9 excellent, 8 strong, 7 acceptable, 6 needs work,
-    5 or below substantial problems.
-12. Set publish=true ONLY if score >= {MIN_QUALITY_SCORE}, there are no material
-    unsupported factual claims, and there are no unresolved HTML problems.
+1. Check concrete factual claims against the evidence ledger/source excerpt.
+2. Numbers, product names, APIs, prices, dates, specs, availability, quotes,
+   partnerships, and performance claims require direct support.
+3. Flag invented facts, fake experience, fabricated quotes, misleading certainty,
+   repetition, generic filler, and unsupported actionable instructions.
+4. Respect the deterministic HTML issues provided.
+5. Score 10 exceptional, 9 excellent, 8 strong, 7 acceptable, 6 needs work.
+6. Publish only when score >= {MIN_QUALITY_SCORE}, there are no material
+   unsupported factual claims, and there are no unresolved HTML issues.
 """
 
     return extract_json_object(call_ai([
         {
             "role": "system",
-            "content": (
-                "You are a strict publication gate. "
-                "When evidence is insufficient, reject the article."
-            ),
+            "content": "You are a strict publication gate. Reject unsupported factual claims.",
         },
         {"role": "user", "content": prompt},
-    ], 4000))
+    ], 2500))
 
 
 def revise_article(
