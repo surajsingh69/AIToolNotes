@@ -852,7 +852,12 @@ def main():
     all_topics = collect_topics()
 
     seen_titles = set()
-    unique_topics = []
+    candidate_pool = []
+
+    # Build a buffer larger than MAX_POSTS_PER_RUN. A source can be blocked
+    # by its publisher (403), deleted, or otherwise unusable. Such a source
+    # must not consume the entire run quota.
+    candidate_buffer_limit = max(MAX_POSTS_PER_RUN * 3, 6)
 
     for topic in all_topics:
         title = topic.get("title", "").strip()
@@ -860,36 +865,36 @@ def main():
 
         if len(title) <= 15:
             continue
-
         if title in seen_titles:
             continue
-
         if link and link in posted_links:
             continue
-
         if is_obvious_duplicate(title, posted_titles):
             continue
 
         seen_titles.add(title)
-        unique_topics.append(topic)
+        candidate_pool.append(topic)
 
-        if len(unique_topics) >= MAX_POSTS_PER_RUN:
+        if len(candidate_pool) >= candidate_buffer_limit:
             break
 
     print(
-        f"\nCandidate articles: {len(unique_topics)} "
-        f"(cap: {MAX_POSTS_PER_RUN})"
+        f"\nCandidate pool: {len(candidate_pool)} "
+        f"(buffer: {candidate_buffer_limit})"
     )
 
-    published_this_run = 0
+    # Fetch and validate sources before counting them toward the publishing
+    # cap. A blocked source therefore cannot starve the whole run.
+    usable_topics = []
 
-    for i, topic_data in enumerate(unique_topics, 1):
+    for topic_data in candidate_pool:
+        if len(usable_topics) >= MAX_POSTS_PER_RUN:
+            break
+
         title = topic_data["title"]
-        source = topic_data["source"]
         link = topic_data.get("link", "")
-        published = topic_data.get("published", "")
 
-        print(f"\nArticle {i}/{len(unique_topics)}: {title[:100]}")
+        print(f"\nChecking source: {title[:100]}")
 
         try:
             source_text = fetch_source_article_text(link)
@@ -901,6 +906,28 @@ def main():
                 )
                 continue
 
+            usable_topics.append((topic_data, source_text))
+
+        except Exception as e:
+            print(f"  SKIP: source validation failed: {e}")
+            continue
+
+    print(
+        f"\nUsable candidates: {len(usable_topics)} "
+        f"(cap: {MAX_POSTS_PER_RUN})"
+    )
+
+    published_this_run = 0
+
+    for i, (topic_data, source_text) in enumerate(usable_topics, 1):
+        title = topic_data["title"]
+        source = topic_data["source"]
+        link = topic_data.get("link", "")
+        published = topic_data.get("published", "")
+
+        print(f"\nArticle {i}/{len(usable_topics)}: {title[:100]}")
+
+        try:
             print("  Analyzing story and building evidence ledger...")
 
             brief = analyze_story(
