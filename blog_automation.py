@@ -1,7 +1,16 @@
-# AIToolNotes Intelligent Blog Automation v2
-# RSS -> source extraction -> intelligence -> writer -> quality check -> Blogger
-import os, json, requests, time, re, difflib
+# AIToolNotes Intelligent Blog Automation v3
+# RSS -> extraction -> editorial intelligence -> evidence ledger -> writer
+# -> deterministic HTML checks -> fact/quality check -> one revision -> Blogger
+
+import os
+import json
+import requests
+import time
+import re
+import difflib
+import html
 import xml.etree.ElementTree as ET
+
 from bs4 import BeautifulSoup
 from groq import Groq
 from google.oauth2.credentials import Credentials
@@ -9,40 +18,40 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BLOG_ID = os.environ["BLOG_ID"]
+
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTED_FILE = os.path.join(BASE_DIR, "posted_titles.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
 CREDS_FILE = os.path.join(BASE_DIR, "credentials.json")
+
 MAX_POSTS_PER_RUN = 2
 INTERNAL_LINKS_PER_POST = 2
-SOURCE_MAX_CHARS = 12000
-MIN_QUALITY_SCORE = 7
+
+SOURCE_MAX_CHARS = 14000
+MIN_SOURCE_CHARS = 900
+
+MIN_QUALITY_SCORE = 8
 MAX_REWRITE_ATTEMPTS = 1
 
+MAX_SOURCE_FACTS = 18
+MAX_EVIDENCE_CHARS_PER_FACT = 500
+
 AFFILIATE_LINKS = {
-    "notion": "", "jasper": "", "murf": "", "synthesia": "", "customgpt": "",
+    "notion": "",
+    "jasper": "",
+    "murf": "",
+    "synthesia": "",
+    "customgpt": "",
 }
-client = Groq(api_key=GROQ_API_KEY)
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36"}
-
-
-def get_blogger_service():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
-            creds = flow.run_local_server(port=8080, open_browser=True)
-        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
-    return build("blogger", "v3", credentials=creds)
-
 
 AI_TOOL_SOURCES = [
     ("https://www.producthunt.com/feed?category=artificial-intelligence", "Product Hunt AI"),
@@ -52,22 +61,101 @@ AI_TOOL_SOURCES = [
     ("https://techcrunch.com/tag/artificial-intelligence/feed/", "TechCrunch AI"),
 ]
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/140.0 Safari/537.36"
+    )
+}
+
+client = Groq(api_key=GROQ_API_KEY)
+
+
+# ---------------------------------------------------------------------------
+# BLOGGER
+# ---------------------------------------------------------------------------
+
+def get_blogger_service():
+    creds = None
+
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CREDS_FILE, SCOPES
+            )
+            creds = flow.run_local_server(port=8080, open_browser=True)
+
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+
+    return build("blogger", "v3", credentials=creds)
+
+
+# ---------------------------------------------------------------------------
+# SOURCE COLLECTION
+# ---------------------------------------------------------------------------
 
 def get_rss_items(url, source, limit=3):
     out = []
+
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
+        r = requests.get(url, headers=HEADERS, timeout=20)
         r.raise_for_status()
+
         root = ET.fromstring(r.content)
-        for item in root.findall(".//item")[:limit]:
-            title = item.findtext("title", "").strip()
-            link = item.findtext("link", "").strip()
-            published = item.findtext("pubDate", "").strip()
-            if len(title) > 15 and link:
-                out.append({"title": title, "link": link, "source": source, "published": published})
+
+        # Standard RSS feeds.
+        items = root.findall(".//item")
+
+        # Basic Atom fallback.
+        if not items:
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall(".//atom:entry", ns)[:limit]:
+                title = entry.findtext("atom:title", "", ns).strip()
+                published = (
+                    entry.findtext("atom:published", "", ns).strip()
+                    or entry.findtext("atom:updated", "", ns).strip()
+                )
+                link = ""
+                link_el = entry.find("atom:link", ns)
+                if link_el is not None:
+                    link = (link_el.attrib.get("href") or "").strip()
+
+                if len(title) > 15 and link:
+                    out.append({
+                        "title": title,
+                        "link": link,
+                        "source": source,
+                        "published": published,
+                    })
+
+        else:
+            for item in items[:limit]:
+                title = item.findtext("title", "").strip()
+                link = item.findtext("link", "").strip()
+                published = (
+                    item.findtext("pubDate", "").strip()
+                    or item.findtext("published", "").strip()
+                )
+
+                if len(title) > 15 and link:
+                    out.append({
+                        "title": title,
+                        "link": link,
+                        "source": source,
+                        "published": published,
+                    })
+
         print(f"  Got {len(out)} from {source}")
+
     except Exception as e:
         print(f"  {source} RSS failed: {e}")
+
     return out
 
 
@@ -76,20 +164,40 @@ def clean_text(text):
 
 
 def fetch_source_article_text(url, max_chars=SOURCE_MAX_CHARS):
+    if not url:
+        return ""
+
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
+        r = requests.get(url, headers=HEADERS, timeout=20)
         r.raise_for_status()
+
         soup = BeautifulSoup(r.text, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form", "noscript", "svg"]):
+
+        for tag in soup([
+            "script", "style", "nav", "footer", "header", "aside",
+            "form", "noscript", "svg", "button", "input", "select",
+            "textarea"
+        ]):
             tag.decompose()
-        container = soup.find("article") or soup.find("main") or soup.find(attrs={"role": "main"}) or soup.body
+
+        # Prefer article-like containers.
+        candidates = [
+            soup.find("article"),
+            soup.find("main"),
+            soup.find(attrs={"role": "main"}),
+        ]
+
+        container = next((x for x in candidates if x), soup.body)
+
         if not container:
             return ""
-        for tag in container.find_all(["button", "input", "select", "textarea"]):
-            tag.decompose()
+
         text = clean_text(container.get_text(" ", strip=True))
+
         print(f"  Extracted {len(text)} source characters")
+
         return text[:max_chars]
+
     except Exception as e:
         print(f"  Could not fetch source body: {e}")
         return ""
@@ -97,66 +205,151 @@ def fetch_source_article_text(url, max_chars=SOURCE_MAX_CHARS):
 
 def collect_topics():
     print("Collecting AI tool topics from configured sources...")
+
     topics = []
+
     for url, source in AI_TOOL_SOURCES:
         topics += get_rss_items(url, source, limit=3)
+
     print(f"\nTotal raw topics: {len(topics)}")
     return topics
 
 
+# ---------------------------------------------------------------------------
+# DUPLICATE CONTROL
+# ---------------------------------------------------------------------------
+
 def normalize_title(title):
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", (title or "").lower())).strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        re.sub(r"[^a-z0-9\s]", " ", (title or "").lower())
+    ).strip()
 
 
 def title_similarity(a, b):
-    return difflib.SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
+    return difflib.SequenceMatcher(
+        None,
+        normalize_title(a),
+        normalize_title(b)
+    ).ratio()
 
 
 def is_obvious_duplicate(title, existing_titles, threshold=0.88):
-    n = normalize_title(title)
+    normalized = normalize_title(title)
+
     for old in existing_titles:
-        if n and n == normalize_title(old):
+        if normalized and normalized == normalize_title(old):
             return True
+
         if title_similarity(title, old) >= threshold:
             return True
+
     return False
 
+
+# ---------------------------------------------------------------------------
+# AI HELPERS
+# ---------------------------------------------------------------------------
 
 def extract_json_object(text):
     if not text:
         raise ValueError("Empty AI response")
-    cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.I)
+
+    cleaned = text.strip()
+
+    cleaned = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        cleaned,
+        flags=re.I
+    )
     cleaned = re.sub(r"\s*```$", "", cleaned)
-    start, end = cleaned.find("{"), cleaned.rfind("}")
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+
     if start == -1 or end <= start:
         raise ValueError("No JSON object found in AI response")
+
     return json.loads(cleaned[start:end + 1])
 
 
 def call_ai(messages, max_tokens):
-    response = client.chat.completions.create(model="openai/gpt-oss-120b", max_tokens=max_tokens, messages=messages)
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        max_tokens=max_tokens,
+        messages=messages,
+    )
+
     content = response.choices[0].message.content or ""
+
     if response.choices[0].finish_reason == "length":
         print("  WARNING: AI response reached token limit")
+
     return content.strip()
 
 
+# ---------------------------------------------------------------------------
+# EDITORIAL INTELLIGENCE + EVIDENCE LEDGER
+# ---------------------------------------------------------------------------
+
 def analyze_story(topic_title, source_name, source_text, published=""):
-    grounding = source_text or "(No source body was available. Do not invent details.)"
-    prompt = f'''You are the editorial intelligence layer for AIToolNotes, a practical AI-tools and technology publication.
-Your job is NOT to write the article. Understand the source and decide whether enough reliable information exists for a genuinely useful article.
+    if len(source_text) < MIN_SOURCE_CHARS:
+        return {
+            "publish_decision": False,
+            "story_summary": "",
+            "important_facts": [],
+            "evidence_ledger": [],
+            "reader_problem_or_interest": "",
+            "why_it_matters": "",
+            "who_should_care": "",
+            "missing_context": [
+                "The source page did not provide enough extractable text."
+            ],
+            "unsupported_claims_to_avoid": [
+                "Do not infer product details from the headline alone."
+            ],
+            "useful_angle": "",
+            "article_type": "news_explainer",
+            "search_intent": "",
+            "commercial_intent": "low",
+            "reason_if_rejected": "Insufficient source material.",
+        }
 
-SOURCE: {source_name}
-TITLE: {topic_title}
-PUBLISHED DATE: {published or "unknown"}
+    prompt = f"""
+You are the evidence-first editorial intelligence layer for AIToolNotes.
+
+Your job is NOT to write the article. Your job is to understand the supplied
+source and build a strict evidence boundary for a later writer.
+
+SOURCE NAME:
+{source_name}
+
+RSS TITLE:
+{topic_title}
+
+PUBLISHED DATE:
+{published or "unknown"}
+
 SOURCE TEXT:
-"""{grounding}"""
+<BEGIN_SOURCE>
+{source_text}
+<END_SOURCE>
 
-Return ONLY valid JSON with these exact keys:
+Return ONLY valid JSON with exactly these keys:
+
 {{
   "publish_decision": true,
   "story_summary": "",
   "important_facts": [],
+  "evidence_ledger": [
+    {{
+      "fact": "",
+      "evidence": "",
+      "confidence": "high"
+    }}
+  ],
   "reader_problem_or_interest": "",
   "why_it_matters": "",
   "who_should_care": "",
@@ -170,79 +363,300 @@ Return ONLY valid JSON with these exact keys:
 }}
 
 Rules:
-1. Base factual claims on the supplied source.
-2. Never invent pricing, features, release dates, performance numbers, integrations, user counts, or capabilities.
-3. If the source is too thin, unclear, broken, or lacks enough information for a useful article, set publish_decision to false.
-4. Prefer a useful reader problem/decision over generic AI news.
-5. Identify what information a reader actually needs.
-6. Practical articles should have a practical angle.
-7. Do not treat promotional claims as independently verified facts.
-8. commercial_intent must be low, medium, or high.
-9. article_type must be one of: news_explainer, practical_guide, tool_review, comparison, roundup, analysis.'''
-    return extract_json_object(call_ai([
-        {"role": "system", "content": "You are a careful editorial researcher. Accuracy and usefulness come before publishing volume."},
-        {"role": "user", "content": prompt}
-    ], 3000))
+
+1. Every factual item in important_facts must be directly supported by the
+   supplied source text.
+2. Every item in evidence_ledger must contain a concise evidence excerpt from
+   the supplied source that supports the fact. Do not invent evidence.
+3. Keep evidence excerpts short and close to the source wording.
+4. Never turn a source headline into a fact unless the body supports it.
+5. Never invent product names, model names, APIs, pricing, dates, statistics,
+   performance numbers, hardware requirements, integrations, user counts,
+   partnerships, availability, quotes, or technical capabilities.
+6. Treat company promotional claims as claims by the company, not independent
+   verification.
+7. If the source is thin, contradictory, inaccessible, mostly navigation,
+   promotional boilerplate, or insufficient for a useful article, set
+   publish_decision to false.
+8. A publishable story should contain enough supported information to explain
+   what happened and why a reader should care.
+9. missing_context means information genuinely absent from the supplied source.
+10. unsupported_claims_to_avoid should contain likely temptations for the writer
+    that the source does NOT establish.
+11. article_type must be one of:
+    news_explainer, practical_guide, tool_review, comparison, roundup, analysis.
+12. commercial_intent must be low, medium, or high.
+13. Do not use outside knowledge to fill gaps.
+14. Keep the evidence ledger to at most {MAX_SOURCE_FACTS} important facts.
+"""
+
+    result = extract_json_object(call_ai([
+        {
+            "role": "system",
+            "content": (
+                "You are a strict evidence editor. "
+                "Source-grounded accuracy is more important than publishing volume."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ], 4500))
+
+    # Normalize critical fields.
+    result.setdefault("important_facts", [])
+    result.setdefault("evidence_ledger", [])
+    result.setdefault("missing_context", [])
+    result.setdefault("unsupported_claims_to_avoid", [])
+
+    result["important_facts"] = result["important_facts"][:MAX_SOURCE_FACTS]
+    result["evidence_ledger"] = result["evidence_ledger"][:MAX_SOURCE_FACTS]
+
+    # Remove malformed evidence entries.
+    valid_ledger = []
+    for item in result["evidence_ledger"]:
+        if not isinstance(item, dict):
+            continue
+
+        fact = clean_text(item.get("fact"))
+        evidence = clean_text(item.get("evidence"))
+
+        if fact and evidence:
+            valid_ledger.append({
+                "fact": fact,
+                "evidence": evidence[:MAX_EVIDENCE_CHARS_PER_FACT],
+                "confidence": item.get("confidence", "medium"),
+            })
+
+    result["evidence_ledger"] = valid_ledger
+
+    if len(result["evidence_ledger"]) < 2:
+        result["publish_decision"] = False
+        result["reason_if_rejected"] = (
+            "The source did not yield enough independently traceable facts."
+        )
+
+    return result
 
 
-def generate_article(topic_title, source_name, source_text, editorial_brief, revision_feedback=""):
-    grounding = source_text or "(No source body was available. Stay strictly within the brief.)"
-    feedback = f"A previous quality check found these issues. Fix all of them:\n{revision_feedback}" if revision_feedback else ""
-    prompt = f'''Write a genuinely useful AIToolNotes article based on the editorial brief below.
+# ---------------------------------------------------------------------------
+# ARTICLE GENERATION
+# ---------------------------------------------------------------------------
 
-This is not a generic SEO article and not a rewrite of the source. Write for a real person who came to the page because they want an answer, practical solution, or help deciding whether an AI tool/development matters.
+def generate_article(
+    topic_title,
+    source_name,
+    source_text,
+    editorial_brief,
+    revision_feedback=""
+):
+    ledger = editorial_brief.get("evidence_ledger", [])
+
+    feedback = ""
+    if revision_feedback:
+        feedback = f"""
+A previous quality check found these problems. Fix every one:
+
+{revision_feedback}
+"""
+
+    prompt = f"""
+Write a genuinely useful AIToolNotes article using ONLY the supplied source
+and evidence ledger.
+
+This is an evidence-constrained article. The evidence ledger defines the
+maximum factual boundary.
 
 EDITORIAL BRIEF:
 {json.dumps(editorial_brief, ensure_ascii=False, indent=2)}
 
-SOURCE: {source_name}
+EVIDENCE LEDGER:
+{json.dumps(ledger, ensure_ascii=False, indent=2)}
+
+SOURCE:
+{source_name}
+
 SOURCE TEXT:
-"""{grounding}"""
+<BEGIN_SOURCE>
+{source_text}
+<END_SOURCE>
 
 {feedback}
 
 Requirements:
-- Aim for 900-1200 words when the topic supports it. Do not pad.
-- The first sentence should immediately tell the reader what matters.
-- Do not start with or repeat the title.
-- Use useful H2 headings and H3 only when helpful.
-- Explain unfamiliar terms plainly.
-- Give concrete examples where supported.
-- Clearly separate confirmed facts from interpretation.
-- Include limitations/caveats when relevant.
-- Never invent features, prices, benchmarks, dates, statistics, quotes, integrations, or user reactions.
-- Never claim personal testing or experience unless the supplied information documents it.
-- Avoid repetitive AI filler such as "in today's rapidly evolving world", "game-changer", "revolutionary", "unlock the power", and "seamlessly" unless genuinely necessary.
-- For practical guides, use numbered steps.
-- For comparisons, explain which use case each option fits rather than declaring a universal winner.
+
+- Use only facts supported by the source/evidence ledger.
+- Do NOT use outside knowledge to fill gaps.
+- Do NOT invent or guess any product, model, API, price, date, statistic,
+  benchmark, integration, hardware requirement, partnership, quote, user count,
+  availability status, or technical capability.
+- If the source contains a company claim, attribute it clearly instead of
+  presenting it as independently verified.
+- You may explain implications as analysis, but do not disguise analysis as a
+  sourced fact.
+- If information is missing, say that it is not specified rather than guessing.
+- Do not claim personal testing or experience.
+- Do not manufacture community reactions.
+- Do not pretend a guide is actionable if the source does not provide enough
+  information for the steps.
+- Aim for 900-1200 words when the evidence supports it. Do not pad.
+- The first sentence should immediately explain what matters.
+- Do not repeat the title as the opening.
+- Use useful H2 headings and H3 only when genuinely helpful.
+- Explain unfamiliar terms in plain language.
 - For news/explainers, explain what changed and why it matters.
-- End with a specific practical takeaway.
-- Output RAW HTML ONLY. No markdown fences. No H1.'''
+- For practical guides, use numbered steps only when the source supports those
+  steps.
+- For comparisons, explain use-case differences without declaring a universal
+  winner.
+- Include limitations or uncertainty when supported.
+- Avoid generic filler such as "in today's rapidly evolving world",
+  "game-changer", "revolutionary", "unlock the power", and "seamlessly".
+- End with a concrete takeaway.
+- Output RAW HTML ONLY.
+- No Markdown.
+- No H1.
+- Do not put citations or source links inside the article unless the source
+  itself supplied a link that is explicitly available to the system.
+"""
+
     raw = call_ai([
-        {"role": "system", "content": "You are the senior writer for a useful, trustworthy technology publication. Write naturally and precisely."},
-        {"role": "user", "content": prompt}
-    ], 6500)
+        {
+            "role": "system",
+            "content": (
+                "You are the senior writer of a trustworthy technology "
+                "publication. Never cross the supplied evidence boundary."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ], 7000)
+
     raw = re.sub(r"^```(?:html)?\s*", "", raw.strip(), flags=re.I)
     raw = re.sub(r"\s*```$", "", raw)
+
     return raw.strip()
 
 
-def quality_check(topic_title, source_name, source_text, editorial_brief, article_html):
-    prompt = f'''You are the final quality editor for AIToolNotes. Evaluate the article BEFORE publication.
+# ---------------------------------------------------------------------------
+# DETERMINISTIC HTML VALIDATION
+# ---------------------------------------------------------------------------
 
-ORIGINAL TOPIC: {topic_title}
-SOURCE: {source_name}
+ALLOWED_TAGS = {
+    "p", "h2", "h3", "h4", "ul", "ol", "li", "strong", "em",
+    "a", "table", "thead", "tbody", "tr", "th", "td", "blockquote",
+    "br", "code", "pre"
+}
+
+
+def validate_and_clean_html(content):
+    if not content:
+        return "", ["Article is empty."]
+
+    # Remove Markdown fences and accidental H1.
+    content = re.sub(r"^```(?:html)?\s*", "", content.strip(), flags=re.I)
+    content = re.sub(r"\s*```$", "", content)
+    content = re.sub(r"<h1\b[^>]*>.*?</h1>", "", content, flags=re.I | re.S)
+
+    soup = BeautifulSoup(content, "html.parser")
+    issues = []
+
+    # Remove dangerous/non-content elements.
+    for tag in soup(["script", "style", "iframe", "object", "embed", "form"]):
+        tag.decompose()
+        issues.append("Removed unsupported or unsafe HTML element.")
+
+    # Remove comments.
+    for comment in soup.find_all(string=lambda x: isinstance(x, type(soup.string))):
+        # BeautifulSoup's Comment type is handled below; this is intentionally
+        # conservative and does not remove normal text nodes.
+        pass
+
+    # Strip tags outside our intended article vocabulary while preserving text.
+    for tag in soup.find_all(True):
+        if tag.name.lower() not in ALLOWED_TAGS:
+            tag.unwrap()
+            issues.append(f"Removed unsupported HTML tag: {tag.name}")
+
+    # Clean links.
+    for a in soup.find_all("a"):
+        href = (a.get("href") or "").strip()
+        if not re.match(r"^https?://", href, flags=re.I):
+            a.unwrap()
+            issues.append("Removed an invalid link.")
+
+    # Tables need a minimum coherent structure.
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 1:
+            table.decompose()
+            issues.append("Removed an empty table.")
+            continue
+
+        max_cells = max((len(r.find_all(["th", "td"])) for r in rows), default=0)
+        if max_cells < 2:
+            table.decompose()
+            issues.append("Removed a malformed table.")
+
+    cleaned = str(soup)
+
+    # Basic structural checks.
+    if not soup.find("p") and not soup.find(["ul", "ol", "table", "blockquote"]):
+        issues.append("Article has no recognizable content structure.")
+
+    text = clean_text(soup.get_text(" ", strip=True))
+
+    if len(text) < 500:
+        issues.append("Article is too short to be useful.")
+
+    return cleaned.strip(), issues
+
+
+# ---------------------------------------------------------------------------
+# FINAL FACT + QUALITY CHECK
+# ---------------------------------------------------------------------------
+
+def quality_check(
+    topic_title,
+    source_name,
+    source_text,
+    editorial_brief,
+    article_html,
+    html_issues
+):
+    prompt = f"""
+You are the final evidence and quality editor for AIToolNotes.
+
+Your most important job is to catch factual claims that are not supported by
+the supplied source/evidence ledger.
+
+ORIGINAL TOPIC:
+{topic_title}
+
+SOURCE:
+{source_name}
+
 EDITORIAL BRIEF:
 {json.dumps(editorial_brief, ensure_ascii=False, indent=2)}
+
+EVIDENCE LEDGER:
+{json.dumps(editorial_brief.get("evidence_ledger", []), ensure_ascii=False, indent=2)}
+
 SOURCE TEXT:
-"""{source_text or "(not available)"}"""
+<BEGIN_SOURCE>
+{source_text}
+<END_SOURCE>
+
+DETERMINISTIC HTML ISSUES:
+{json.dumps(html_issues, ensure_ascii=False)}
+
 ARTICLE HTML:
-"""{article_html}"""
+<BEGIN_ARTICLE>
+{article_html}
+<END_ARTICLE>
 
 Return ONLY valid JSON:
+
 {{
-  "publish": true,
-  "score": 8,
+  "publish": false,
+  "score": 0,
   "issues": [],
   "unsupported_claims": [],
   "missing_value": [],
@@ -250,78 +664,231 @@ Return ONLY valid JSON:
   "revision_instructions": ""
 }}
 
-Score 10 exceptional, 9 excellent, 8 strong, 7 publishable, 6 needs revision, 5 or below substantial revision.
-Set publish=true only when score >= 7.
-Flag invented/unsupported facts, generic filler, source rewriting, misleading claims, missing explanation, repetition, fake experience, weak HTML, or failure to solve the reader's likely problem.'''
+Rules:
+
+1. Check concrete factual claims against the source text and evidence ledger.
+2. A claim is unsupported if the source does not establish it.
+3. Treat numbers, product names, APIs, prices, dates, technical specs,
+   availability, user counts, partnerships, quotes, and performance claims
+   as high-risk claims.
+4. Do not give credit merely because a claim sounds plausible.
+5. Flag claims that are more specific than the available evidence.
+6. Flag invented personal testing, invented user reactions, and fabricated
+   quotes.
+7. Flag misleading certainty where the source only makes a promotional claim.
+8. Check whether the article actually helps the reader.
+9. Check repetition and generic filler.
+10. Check whether the HTML is coherent.
+11. Score 10 exceptional, 9 excellent, 8 strong, 7 acceptable, 6 needs work,
+    5 or below substantial problems.
+12. Set publish=true ONLY if score >= {MIN_QUALITY_SCORE}, there are no material
+    unsupported factual claims, and there are no unresolved HTML problems.
+"""
+
     return extract_json_object(call_ai([
-        {"role": "system", "content": "You are a strict but practical final editor. Protect readers from inaccurate or empty content."},
-        {"role": "user", "content": prompt}
-    ], 2500))
+        {
+            "role": "system",
+            "content": (
+                "You are a strict publication gate. "
+                "When evidence is insufficient, reject the article."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ], 4000))
 
 
-def revise_article(topic_title, source_name, source_text, editorial_brief, article_html, quality_result):
+def revise_article(
+    topic_title,
+    source_name,
+    source_text,
+    editorial_brief,
+    article_html,
+    quality_result
+):
     feedback = json.dumps({
         "issues": quality_result.get("issues", []),
         "unsupported_claims": quality_result.get("unsupported_claims", []),
         "missing_value": quality_result.get("missing_value", []),
         "style_issues": quality_result.get("style_issues", []),
-        "revision_instructions": quality_result.get("revision_instructions", "")
+        "revision_instructions": quality_result.get(
+            "revision_instructions", ""
+        ),
     }, ensure_ascii=False, indent=2)
-    return generate_article(topic_title, source_name, source_text, editorial_brief, feedback)
 
+    return generate_article(
+        topic_title,
+        source_name,
+        source_text,
+        editorial_brief,
+        revision_feedback=feedback,
+    )
+
+
+# ---------------------------------------------------------------------------
+# LINK INJECTION
+# ---------------------------------------------------------------------------
 
 def inject_affiliate_links(content):
     for tool, url in AFFILIATE_LINKS.items():
         if not url:
             continue
-        pattern = re.compile(r'(?<!["\'>])\b(' + re.escape(tool) + r')\b', re.I)
-        content = pattern.sub(lambda m: f'<a href="{url}" rel="nofollow sponsored">{m.group(1)}</a>', content, count=1)
+
+        pattern = re.compile(
+            r'(?<!["\'>])\b(' + re.escape(tool) + r')\b',
+            re.I
+        )
+
+        content = pattern.sub(
+            lambda m: (
+                f'<a href="{html.escape(url, quote=True)}" '
+                f'rel="nofollow sponsored">{m.group(1)}</a>'
+            ),
+            content,
+            count=1,
+        )
+
     return content
 
 
 def inject_internal_links(content, posted_history, current_link):
-    candidates = [p for p in posted_history if isinstance(p, dict) and p.get("post_url") and p.get("link") != current_link]
+    candidates = [
+        p for p in posted_history
+        if isinstance(p, dict)
+        and p.get("post_url")
+        and p.get("link") != current_link
+        and p.get("title")
+    ]
+
     if not candidates:
         return content
-    picks = candidates[-INTERNAL_LINKS_PER_POST:]
-    links_html = "".join(f'<li><a href="{p["post_url"]}">{p["title"]}</a></li>' for p in picks)
-    return content + f"<h2>Related reading</h2><ul>{links_html}</ul>"
 
+    picks = candidates[-INTERNAL_LINKS_PER_POST:]
+
+    links_html = "".join(
+        f'<li><a href="{html.escape(p["post_url"], quote=True)}">'
+        f'{html.escape(p["title"])}</a></li>'
+        for p in picks
+    )
+
+    return (
+        content
+        + f"<h2>Related reading</h2><ul>{links_html}</ul>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BLOGGER PUBLISH
+# ---------------------------------------------------------------------------
 
 def post_to_blogger(service, title, content):
-    result = service.posts().insert(blogId=BLOG_ID, body={"kind": "blogger#post", "title": title, "content": content}, isDraft=False).execute()
+    result = (
+        service.posts()
+        .insert(
+            blogId=BLOG_ID,
+            body={
+                "kind": "blogger#post",
+                "title": title,
+                "content": content,
+            },
+            isDraft=False,
+        )
+        .execute()
+    )
+
     url = result.get("url", "")
     print(f"  Posted to Blogger: {url}")
+
     return result, url
 
 
-def main():
-    print("AIToolNotes Intelligent Blog Automation Starting...")
-    print("Mode: understand -> write -> quality check -> publish")
+# ---------------------------------------------------------------------------
+# HISTORY
+# ---------------------------------------------------------------------------
+
+def load_posted_history():
     try:
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
-            posted = json.load(f)
-    except Exception:
-        posted = []
+            data = json.load(f)
 
-    posted_titles = {p.get("title") for p in posted if isinstance(p, dict) and p.get("title")}
-    posted_links = {p.get("link") for p in posted if isinstance(p, dict) and p.get("link")}
-    posted_titles.update(p for p in posted if isinstance(p, str))
+        return data if isinstance(data, list) else []
+
+    except Exception:
+        return []
+
+
+def save_posted_history(posted):
+    with open(POSTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            posted[-500:],
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+
+def main():
+    print("AIToolNotes Intelligent Blog Automation v3 Starting...")
+    print(
+        "Mode: source -> intelligence -> evidence -> write -> "
+        "HTML check -> fact check -> publish"
+    )
+
+    posted = load_posted_history()
+
+    posted_titles = {
+        p.get("title")
+        for p in posted
+        if isinstance(p, dict) and p.get("title")
+    }
+
+    posted_links = {
+        p.get("link")
+        for p in posted
+        if isinstance(p, dict) and p.get("link")
+    }
+
+    posted_titles.update(
+        p for p in posted
+        if isinstance(p, str)
+    )
 
     service = get_blogger_service()
     all_topics = collect_topics()
-    seen_titles, unique_topics = set(), []
+
+    seen_titles = set()
+    unique_topics = []
 
     for topic in all_topics:
-        title, link = topic.get("title", "").strip(), topic.get("link", "").strip()
-        if len(title) <= 15 or title in seen_titles or (link and link in posted_links) or is_obvious_duplicate(title, posted_titles):
+        title = topic.get("title", "").strip()
+        link = topic.get("link", "").strip()
+
+        if len(title) <= 15:
             continue
+
+        if title in seen_titles:
+            continue
+
+        if link and link in posted_links:
+            continue
+
+        if is_obvious_duplicate(title, posted_titles):
+            continue
+
         seen_titles.add(title)
         unique_topics.append(topic)
+
         if len(unique_topics) >= MAX_POSTS_PER_RUN:
             break
 
-    print(f"\nCandidate articles: {len(unique_topics)} (cap: {MAX_POSTS_PER_RUN})")
+    print(
+        f"\nCandidate articles: {len(unique_topics)} "
+        f"(cap: {MAX_POSTS_PER_RUN})"
+    )
+
     published_this_run = 0
 
     for i, topic_data in enumerate(unique_topics, 1):
@@ -329,56 +896,193 @@ def main():
         source = topic_data["source"]
         link = topic_data.get("link", "")
         published = topic_data.get("published", "")
-        print(f"\nArticle {i}/{len(unique_topics)}: {title[:80]}")
+
+        print(f"\nArticle {i}/{len(unique_topics)}: {title[:100]}")
+
         try:
-            source_text = fetch_source_article_text(link) if link else ""
-            print("  Analyzing story...")
-            brief = analyze_story(title, source, source_text, published)
-            print(f"  Decision: {'PUBLISHABLE' if brief.get('publish_decision') else 'SKIP'}")
-            print(f"  Type: {brief.get('article_type', 'unknown')}")
-            print(f"  Intent: {brief.get('search_intent', 'unknown')}")
-            print(f"  Commercial intent: {brief.get('commercial_intent', 'unknown')}")
-            if not brief.get("publish_decision", False):
-                print(f"  Skipped: {brief.get('reason_if_rejected', 'insufficient value')}")
+            source_text = fetch_source_article_text(link)
+
+            if len(source_text) < MIN_SOURCE_CHARS:
+                print(
+                    f"  SKIP: source text too short "
+                    f"({len(source_text)} chars)."
+                )
                 continue
 
-            print("  Writing useful article...")
-            article = generate_article(title, source, source_text, brief)
-            quality = quality_check(title, source, source_text, brief, article)
-            score = int(quality.get("score", 0) or 0)
-            print(f"  Quality score: {score}/10 | Publish: {quality.get('publish', False)}")
+            print("  Analyzing story and building evidence ledger...")
 
-            if not quality.get("publish", False) or score < MIN_QUALITY_SCORE:
+            brief = analyze_story(
+                title,
+                source,
+                source_text,
+                published,
+            )
+
+            decision = bool(brief.get("publish_decision"))
+
+            print(
+                f"  Decision: "
+                f"{'PUBLISHABLE' if decision else 'SKIP'}"
+            )
+            print(
+                f"  Type: {brief.get('article_type', 'unknown')}"
+            )
+            print(
+                f"  Intent: {brief.get('search_intent', 'unknown')}"
+            )
+            print(
+                f"  Commercial intent: "
+                f"{brief.get('commercial_intent', 'unknown')}"
+            )
+            print(
+                f"  Evidence facts: "
+                f"{len(brief.get('evidence_ledger', []))}"
+            )
+
+            if not decision:
+                print(
+                    "  Skipped: "
+                    f"{brief.get('reason_if_rejected', 'insufficient evidence')}"
+                )
+                continue
+
+            print("  Writing evidence-constrained article...")
+
+            article = generate_article(
+                title,
+                source,
+                source_text,
+                brief,
+            )
+
+            article, html_issues = validate_and_clean_html(article)
+
+            print(
+                f"  HTML check: "
+                f"{'PASS' if not html_issues else 'ISSUES FOUND'}"
+            )
+
+            quality = quality_check(
+                title,
+                source,
+                source_text,
+                brief,
+                article,
+                html_issues,
+            )
+
+            score = int(quality.get("score", 0) or 0)
+
+            publish = bool(quality.get("publish"))
+
+            print(
+                f"  Quality score: {score}/10 | "
+                f"Publish: {publish}"
+            )
+
+            if not publish or score < MIN_QUALITY_SCORE:
                 if MAX_REWRITE_ATTEMPTS:
                     print("  Revising article once...")
-                    article = revise_article(title, source, source_text, brief, article, quality)
-                    quality = quality_check(title, source, source_text, brief, article)
-                    score = int(quality.get("score", 0) or 0)
-                    print(f"  Revised score: {score}/10 | Publish: {quality.get('publish', False)}")
 
-            if not quality.get("publish", False) or score < MIN_QUALITY_SCORE:
-                print("  NOT PUBLISHED. Article failed the quality threshold.")
+                    article = revise_article(
+                        title,
+                        source,
+                        source_text,
+                        brief,
+                        article,
+                        quality,
+                    )
+
+                    article, html_issues = validate_and_clean_html(article)
+
+                    quality = quality_check(
+                        title,
+                        source,
+                        source_text,
+                        brief,
+                        article,
+                        html_issues,
+                    )
+
+                    score = int(quality.get("score", 0) or 0)
+                    publish = bool(quality.get("publish"))
+
+                    print(
+                        f"  Revised score: {score}/10 | "
+                        f"Publish: {publish}"
+                    )
+
+            if not publish or score < MIN_QUALITY_SCORE:
+                print(
+                    "  NOT PUBLISHED. "
+                    "Article failed the evidence/quality gate."
+                )
+
+                if quality.get("unsupported_claims"):
+                    print(
+                        "  Unsupported claims detected: "
+                        f"{len(quality.get('unsupported_claims', []))}"
+                    )
+
                 continue
 
+            # Link injection happens only AFTER factual/editorial validation.
             article = inject_affiliate_links(article)
-            article = inject_internal_links(article, posted, link)
-            _, post_url = post_to_blogger(service, title, article)
+            article = inject_internal_links(
+                article,
+                posted,
+                link,
+            )
+
+            # Final deterministic HTML pass after link injection.
+            article, final_html_issues = validate_and_clean_html(article)
+
+            if final_html_issues:
+                print(
+                    "  NOT PUBLISHED. Final HTML validation failed: "
+                    f"{final_html_issues}"
+                )
+                continue
+
+            _, post_url = post_to_blogger(
+                service,
+                title,
+                article,
+            )
+
             posted.append({
-                "title": title, "link": link, "post_url": post_url, "source": source,
-                "quality_score": score, "article_type": brief.get("article_type", ""),
-                "commercial_intent": brief.get("commercial_intent", "")
+                "title": title,
+                "link": link,
+                "post_url": post_url,
+                "source": source,
+                "quality_score": score,
+                "article_type": brief.get("article_type", ""),
+                "commercial_intent": brief.get(
+                    "commercial_intent",
+                    "",
+                ),
+                "evidence_facts": len(
+                    brief.get("evidence_ledger", [])
+                ),
             })
+
             posted = posted[-500:]
-            with open(POSTED_FILE, "w", encoding="utf-8") as f:
-                json.dump(posted, f, ensure_ascii=False, indent=2)
+            save_posted_history(posted)
+
             posted_titles.add(title)
+            posted_links.add(link)
+
             published_this_run += 1
+
             time.sleep(3)
+
         except Exception as e:
-            print(f"  Failed: {e}")
+            print(f"  Failed: {type(e).__name__}: {e}")
             continue
 
-    print(f"\nDone. Published {published_this_run} article(s).")
+    print(
+        f"\nDone. Published {published_this_run} article(s)."
+    )
 
 
 if __name__ == "__main__":
