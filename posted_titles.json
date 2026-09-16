@@ -147,5 +147,25 @@
     "quality_score": 8,
     "article_type": "news_explainer",
     "commercial_intent": "low"
+  },
+  {
+    "title": "Reimagining advertising with AI",
+    "link": "https://openai.com/index/reimagining-advertising-with-ai",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/09/reimagining-advertising-with-ai.html",
+    "source": "OpenAI",
+    "quality_score": 9,
+    "article_type": "news_explainer",
+    "commercial_intent": "low",
+    "evidence_facts": 12
+  },
+  {
+    "title": "Your Agent Aced the Task. Will It Do It Again?",
+    "link": "https://huggingface.co/blog/ibm-research/altk-evolve-consistency",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/09/your-agent-aced-task-will-it-do-it-again.html",
+    "source": "Hugging Face",
+    "quality_score": 9,
+    "article_type": "news_explainer",
+    "commercial_intent": "low",
+    "evidence_facts": 9
   }
 ]
