@@ -1,25 +1,37 @@
-# AIToolNotes Intelligent Blog Automation v4
-# RSS -> source extraction -> editorial intelligence -> evidence ledger
-# -> headline/SEO/engagement -> writer -> deterministic HTML checks
-# -> fact/quality gate -> one revision -> contextual links -> Blogger
+````python
+# AIToolNotes Intelligent Blog Automation v5
 #
-# Notes:
-# - Keeps the evidence-first architecture from v3.
-# - Adds topic scoring, headline generation, SEO intent, hook strategy,
-#   engagement checks, source attribution, contextual affiliate placement,
-#   and smarter internal-link selection.
-# - Does NOT use outside facts when writing an article.
+# RSS -> source extraction -> editorial intelligence
+# -> deterministic evidence verification
+# -> headline/SEO/engagement -> writer
+# -> deterministic HTML checks
+# -> fact/quality gate -> one revision
+# -> contextual links -> final validation -> Blogger
 #
-# Required environment variables:
+# v5 improvements:
+# - Evidence excerpts are deterministically verified against source text.
+# - Editorial score is calculated in Python.
+# - Larger candidate pool.
+# - Better source-container extraction.
+# - Better headline selection.
+# - Revision receives the previous article.
+# - Affiliate injection is safe and supports aliases.
+# - Final enrichment is deterministically validated.
+# - Richer publishing history.
+#
+# Required:
 #   GROQ_API_KEY
 #   BLOG_ID
 #
-# Google Blogger OAuth files:
+# Google Blogger:
 #   credentials.json in this script directory.
 #
 # Optional:
-#   AFFILIATE_NOTION_URL, AFFILIATE_JASPER_URL, AFFILIATE_MURF_URL,
-#   AFFILIATE_SYNTHESIA_URL, AFFILIATE_CUSTOMGPT_URL
+#   AFFILIATE_NOTION_URL
+#   AFFILIATE_JASPER_URL
+#   AFFILIATE_MURF_URL
+#   AFFILIATE_SYNTHESIA_URL
+#   AFFILIATE_CUSTOMGPT_URL
 
 import os
 import json
@@ -29,10 +41,13 @@ import re
 import difflib
 import html
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 
-from bs4 import BeautifulSoup, Comment
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup, Comment, NavigableString
 from groq import Groq
+
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -46,30 +61,40 @@ from googleapiclient.discovery import build
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BLOG_ID = os.environ["BLOG_ID"]
 
-SCOPES = ["https://www.googleapis.com/auth/blogger"]
+SCOPES = [
+    "https://www.googleapis.com/auth/blogger"
+]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 POSTED_FILE = os.path.join(BASE_DIR, "posted_titles.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
 CREDS_FILE = os.path.join(BASE_DIR, "credentials.json")
 
 MAX_POSTS_PER_RUN = 2
-CANDIDATE_BUFFER_MULTIPLIER = 4
+
+# Evaluate more stories before selecting winners.
+RAW_CANDIDATE_LIMIT = 40
+MAX_EDITORIAL_CANDIDATES = 24
 
 INTERNAL_LINKS_PER_POST = 2
-SOURCE_MAX_CHARS = 12000
+
+SOURCE_MAX_CHARS = 16000
 MIN_SOURCE_CHARS = 900
 
-MIN_QUALITY_SCORE = 8
-MIN_ENGAGEMENT_SCORE = 7
+MIN_QUALITY_SCORE = 8.0
+MIN_ENGAGEMENT_SCORE = 7.0
 MIN_EDITORIAL_SCORE = 6.5
 
 MAX_REWRITE_ATTEMPTS = 1
+
 MAX_SOURCE_FACTS = 12
 MAX_EVIDENCE_CHARS_PER_FACT = 300
 
 MAX_ARTICLE_WORDS = 1100
 MIN_ARTICLE_WORDS = 500
+
+MAX_REVISION_ARTICLE_CHARS = 18000
 
 AFFILIATE_LINKS = {
     "notion": os.getenv("AFFILIATE_NOTION_URL", "").strip(),
@@ -79,14 +104,47 @@ AFFILIATE_LINKS = {
     "customgpt": os.getenv("AFFILIATE_CUSTOMGPT_URL", "").strip(),
 }
 
+# Matching aliases for contextual affiliate placement.
+AFFILIATE_ALIASES = {
+    "notion": [
+        "notion"
+    ],
+    "jasper": [
+        "jasper",
+        "jasper ai"
+    ],
+    "murf": [
+        "murf",
+        "murf ai"
+    ],
+    "synthesia": [
+        "synthesia",
+        "synthesia ai"
+    ],
+    "customgpt": [
+        "customgpt",
+        "custom gpt",
+        "custom gpts",
+    ],
+}
+
 AI_TOOL_SOURCES = [
     (
         "https://www.producthunt.com/feed?category=artificial-intelligence",
         "Product Hunt AI",
     ),
-    ("https://openai.com/news/rss.xml", "OpenAI"),
-    ("https://blog.google/technology/ai/rss/", "Google AI Blog"),
-    ("https://huggingface.co/blog/feed.xml", "Hugging Face"),
+    (
+        "https://openai.com/news/rss.xml",
+        "OpenAI",
+    ),
+    (
+        "https://blog.google/technology/ai/rss/",
+        "Google AI Blog",
+    ),
+    (
+        "https://huggingface.co/blog/feed.xml",
+        "Hugging Face",
+    ),
     (
         "https://techcrunch.com/tag/artificial-intelligence/feed/",
         "TechCrunch AI",
@@ -111,45 +169,105 @@ def get_blogger_service():
     creds = None
 
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        creds = Credentials.from_authorized_user_file(
+            TOKEN_FILE,
+            SCOPES,
+        )
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                CREDS_FILE, SCOPES
+                CREDS_FILE,
+                SCOPES,
             )
-            creds = flow.run_local_server(port=8080, open_browser=True)
+            creds = flow.run_local_server(
+                port=8080,
+                open_browser=True,
+            )
 
         with open(TOKEN_FILE, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
-    return build("blogger", "v3", credentials=creds)
+    return build(
+        "blogger",
+        "v3",
+        credentials=creds,
+    )
 
 
 # ---------------------------------------------------------------------------
-# SOURCE COLLECTION
+# TEXT HELPERS
 # ---------------------------------------------------------------------------
 
 def clean_text(text):
-    return re.sub(r"\s+", " ", text or "").strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        text or "",
+    ).strip()
 
 
-def get_rss_items(url, source, limit=5):
+def normalize_for_match(text):
+    text = html.unescape(text or "")
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^\w\s]", "", text)
+    return text.strip()
+
+
+def keyword_tokens(text):
+    words = re.findall(
+        r"[a-z0-9]{3,}",
+        (text or "").lower(),
+    )
+
+    stopwords = {
+        "the", "and", "for", "with", "that", "this",
+        "from", "into", "about", "what", "when",
+        "where", "which", "will", "could", "have",
+        "has", "how", "new", "your", "you", "are",
+        "its", "their", "they", "than", "more",
+        "after", "before", "using", "tool", "tools",
+        "artificial", "intelligence",
+    }
+
+    return {
+        word
+        for word in words
+        if word not in stopwords
+    }
+
+
+# ---------------------------------------------------------------------------
+# RSS
+# ---------------------------------------------------------------------------
+
+def get_rss_items(url, source, limit=10):
     out = []
 
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        root = ET.fromstring(r.content)
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        root = ET.fromstring(response.content)
 
         items = root.findall(".//item")
 
         if items:
             for item in items[:limit]:
-                title = clean_text(item.findtext("title", ""))
-                link = clean_text(item.findtext("link", ""))
+                title = clean_text(
+                    item.findtext("title", "")
+                )
+
+                link = clean_text(
+                    item.findtext("link", "")
+                )
 
                 published = (
                     clean_text(item.findtext("pubDate", ""))
@@ -164,36 +282,78 @@ def get_rss_items(url, source, limit=5):
                         "source": source,
                         "published": published,
                     })
-        else:
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
 
-            for entry in root.findall(".//atom:entry", ns)[:limit]:
+        else:
+            ns = {
+                "atom": "http://www.w3.org/2005/Atom"
+            }
+
+            entries = root.findall(
+                ".//atom:entry",
+                ns,
+            )
+
+            for entry in entries[:limit]:
                 title = clean_text(
-                    entry.findtext("atom:title", "", ns)
+                    entry.findtext(
+                        "atom:title",
+                        "",
+                        ns,
+                    )
                 )
 
                 published = (
                     clean_text(
-                        entry.findtext("atom:published", "", ns)
+                        entry.findtext(
+                            "atom:published",
+                            "",
+                            ns,
+                        )
                     )
                     or clean_text(
-                        entry.findtext("atom:updated", "", ns)
+                        entry.findtext(
+                            "atom:updated",
+                            "",
+                            ns,
+                        )
                     )
                 )
 
                 link = ""
-                for link_el in entry.findall("atom:link", ns):
-                    href = clean_text(link_el.attrib.get("href", ""))
-                    rel = link_el.attrib.get("rel", "alternate")
+
+                for link_el in entry.findall(
+                    "atom:link",
+                    ns,
+                ):
+                    href = clean_text(
+                        link_el.attrib.get(
+                            "href",
+                            "",
+                        )
+                    )
+
+                    rel = link_el.attrib.get(
+                        "rel",
+                        "alternate",
+                    )
 
                     if href and rel == "alternate":
                         link = href
                         break
 
                 if not link:
-                    link_el = entry.find("atom:link", ns)
+                    link_el = entry.find(
+                        "atom:link",
+                        ns,
+                    )
+
                     if link_el is not None:
-                        link = clean_text(link_el.attrib.get("href", ""))
+                        link = clean_text(
+                            link_el.attrib.get(
+                                "href",
+                                "",
+                            )
+                        )
 
                 if len(title) > 15 and link:
                     out.append({
@@ -203,61 +363,38 @@ def get_rss_items(url, source, limit=5):
                         "published": published,
                     })
 
-        print(f"  Got {len(out)} from {source}")
+        print(
+            f"  Got {len(out)} from {source}"
+        )
 
     except Exception as e:
-        print(f"  {source} RSS failed: {e}")
+        print(
+            f"  {source} RSS failed: {e}"
+        )
 
     return out
 
 
-def fetch_source_article_text(url, max_chars=SOURCE_MAX_CHARS):
-    if not url:
-        return ""
-
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        for tag in soup([
-            "script", "style", "nav", "footer", "header", "aside",
-            "form", "noscript", "svg", "button", "input", "select",
-            "textarea", "iframe", "object", "embed"
-        ]):
-            tag.decompose()
-
-        candidates = [
-            soup.find("article"),
-            soup.find("main"),
-            soup.find(attrs={"role": "main"}),
-        ]
-
-        container = next((x for x in candidates if x), soup.body)
-
-        if not container:
-            return ""
-
-        text = clean_text(container.get_text(" ", strip=True))
-
-        print(f"  Extracted {len(text)} source characters")
-        return text[:max_chars]
-
-    except Exception as e:
-        print(f"  Could not fetch source body: {e}")
-        return ""
-
-
 def collect_topics():
-    print("Collecting AI topics from configured sources...")
+    print(
+        "Collecting AI topics from configured sources..."
+    )
 
     topics = []
 
     for url, source in AI_TOOL_SOURCES:
-        topics.extend(get_rss_items(url, source, limit=5))
+        topics.extend(
+            get_rss_items(
+                url,
+                source,
+                limit=10,
+            )
+        )
 
-    print(f"\nTotal raw topics: {len(topics)}")
+    print(
+        f"\nTotal raw topics: {len(topics)}"
+    )
+
     return topics
 
 
@@ -269,7 +406,11 @@ def normalize_title(title):
     return re.sub(
         r"\s+",
         " ",
-        re.sub(r"[^a-z0-9\s]", " ", (title or "").lower()),
+        re.sub(
+            r"[^a-z0-9\s]",
+            " ",
+            (title or "").lower(),
+        ),
     ).strip()
 
 
@@ -281,17 +422,265 @@ def title_similarity(a, b):
     ).ratio()
 
 
-def is_obvious_duplicate(title, existing_titles, threshold=0.88):
+def is_obvious_duplicate(
+    title,
+    existing_titles,
+    threshold=0.88,
+):
     normalized = normalize_title(title)
 
     for old in existing_titles:
+        if not old:
+            continue
+
         if normalized and normalized == normalize_title(old):
             return True
 
-        if title_similarity(title, old) >= threshold:
+        if title_similarity(
+            title,
+            old,
+        ) >= threshold:
             return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# FRESHNESS
+# ---------------------------------------------------------------------------
+
+def parse_published_date(value):
+    if not value:
+        return None
+
+    value = value.strip()
+
+    formats = [
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(
+                value,
+                fmt,
+            )
+        except ValueError:
+            continue
+
+    return None
+
+
+def freshness_score(published):
+    dt = parse_published_date(published)
+
+    if not dt:
+        return 5.0
+
+    if dt.tzinfo is None:
+        dt = dt.replace(
+            tzinfo=timezone.utc
+        )
+
+    now = datetime.now(timezone.utc)
+
+    age_hours = max(
+        0,
+        (now - dt).total_seconds() / 3600,
+    )
+
+    if age_hours <= 24:
+        return 10.0
+
+    if age_hours <= 72:
+        return 9.0
+
+    if age_hours <= 168:
+        return 8.0
+
+    if age_hours <= 336:
+        return 6.5
+
+    if age_hours <= 720:
+        return 5.0
+
+    return 3.0
+
+
+# ---------------------------------------------------------------------------
+# SOURCE EXTRACTION
+# ---------------------------------------------------------------------------
+
+def score_content_container(container):
+    if not container:
+        return -1
+
+    paragraphs = container.find_all("p")
+    text = clean_text(
+        container.get_text(
+            " ",
+            strip=True,
+        )
+    )
+
+    if len(text) < 300:
+        return -1
+
+    paragraph_text = sum(
+        len(clean_text(p.get_text(" ", strip=True)))
+        for p in paragraphs
+    )
+
+    links = container.find_all("a")
+
+    link_text = sum(
+        len(clean_text(a.get_text(" ", strip=True)))
+        for a in links
+    )
+
+    text_length = max(
+        len(text),
+        1,
+    )
+
+    paragraph_score = min(
+        paragraph_text / 5000,
+        5,
+    )
+
+    density_score = (
+        paragraph_text / text_length
+    ) * 5
+
+    link_penalty = (
+        link_text / text_length
+    ) * 5
+
+    paragraph_count_bonus = min(
+        len(paragraphs) / 10,
+        3,
+    )
+
+    return (
+        paragraph_score
+        + density_score
+        + paragraph_count_bonus
+        - link_penalty
+    )
+
+
+def fetch_source_article_text(
+    url,
+    max_chars=SOURCE_MAX_CHARS,
+):
+    if not url:
+        return ""
+
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20,
+        )
+
+        response.raise_for_status()
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
+
+        for tag in soup([
+            "script",
+            "style",
+            "nav",
+            "footer",
+            "header",
+            "aside",
+            "form",
+            "noscript",
+            "svg",
+            "button",
+            "input",
+            "select",
+            "textarea",
+            "iframe",
+            "object",
+            "embed",
+        ]):
+            tag.decompose()
+
+        candidates = []
+
+        article = soup.find("article")
+        if article:
+            candidates.append(article)
+
+        main = soup.find("main")
+        if main:
+            candidates.append(main)
+
+        role_main = soup.find(
+            attrs={"role": "main"}
+        )
+        if role_main:
+            candidates.append(role_main)
+
+        for div in soup.find_all(
+            ["div", "section"]
+        ):
+            if div.find_all("p"):
+                candidates.append(div)
+
+        scored = []
+
+        for candidate in candidates:
+            score = score_content_container(
+                candidate
+            )
+
+            if score >= 0:
+                scored.append(
+                    (score, candidate)
+                )
+
+        if scored:
+            scored.sort(
+                key=lambda x: x[0],
+                reverse=True,
+            )
+
+            container = scored[0][1]
+
+        else:
+            container = soup.body
+
+        if not container:
+            return ""
+
+        text = clean_text(
+            container.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        print(
+            f"  Extracted {len(text)} source characters"
+        )
+
+        return text[:max_chars]
+
+    except Exception as e:
+        print(
+            f"  Could not fetch source body: {e}"
+        )
+
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +689,9 @@ def is_obvious_duplicate(title, existing_titles, threshold=0.88):
 
 def extract_json_object(text):
     if not text:
-        raise ValueError("Empty AI response")
+        raise ValueError(
+            "Empty AI response"
+        )
 
     cleaned = text.strip()
 
@@ -311,15 +702,23 @@ def extract_json_object(text):
         flags=re.I,
     )
 
-    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(
+        r"\s*```$",
+        "",
+        cleaned,
+    )
 
     start = cleaned.find("{")
     end = cleaned.rfind("}")
 
     if start == -1 or end <= start:
-        raise ValueError("No JSON object found in AI response")
+        raise ValueError(
+            "No JSON object found in AI response"
+        )
 
-    return json.loads(cleaned[start:end + 1])
+    return json.loads(
+        cleaned[start:end + 1]
+    )
 
 
 def call_ai(messages, max_tokens):
@@ -330,55 +729,258 @@ def call_ai(messages, max_tokens):
     )
 
     choice = response.choices[0]
-    content = choice.message.content or ""
+
+    content = (
+        choice.message.content
+        or ""
+    )
 
     if choice.finish_reason == "length":
-        print("  WARNING: AI response reached token limit")
+        print(
+            "  WARNING: AI response reached token limit"
+        )
 
     return content.strip()
 
 
 # ---------------------------------------------------------------------------
-# EDITORIAL INTELLIGENCE + EVIDENCE LEDGER
+# EVIDENCE VERIFICATION
 # ---------------------------------------------------------------------------
 
-def analyze_story(topic_title, source_name, source_text, published=""):
+def evidence_match_score(
+    evidence,
+    source_text,
+):
+    evidence_norm = normalize_for_match(
+        evidence
+    )
+
+    source_norm = normalize_for_match(
+        source_text
+    )
+
+    if not evidence_norm:
+        return 0.0
+
+    if evidence_norm in source_norm:
+        return 1.0
+
+    evidence_tokens = keyword_tokens(
+        evidence_norm
+    )
+
+    source_tokens = keyword_tokens(
+        source_norm
+    )
+
+    if not evidence_tokens or not source_tokens:
+        return 0.0
+
+    overlap = (
+        len(
+            evidence_tokens
+            & source_tokens
+        )
+        / len(evidence_tokens)
+    )
+
+    return min(
+        overlap,
+        1.0,
+    )
+
+
+def verify_evidence_ledger(
+    ledger,
+    source_text,
+):
+    verified = []
+    rejected = []
+
+    for item in ledger:
+        if not isinstance(item, dict):
+            continue
+
+        fact = clean_text(
+            item.get("fact", "")
+        )
+
+        evidence = clean_text(
+            item.get("evidence", "")
+        )
+
+        confidence = clean_text(
+            item.get("confidence", "")
+        )
+
+        if not fact or not evidence:
+            rejected.append({
+                "fact": fact,
+                "reason": "Missing fact or evidence.",
+            })
+            continue
+
+        score = evidence_match_score(
+            evidence,
+            source_text,
+        )
+
+        # Exact source substring is ideal.
+        # Token overlap is accepted only when strong.
+        if score >= 0.92:
+            verified.append({
+                "fact": fact[:500],
+                "evidence": evidence[
+                    :MAX_EVIDENCE_CHARS_PER_FACT
+                ],
+                "confidence": (
+                    confidence
+                    if confidence in {
+                        "high",
+                        "medium",
+                        "low",
+                    }
+                    else "medium"
+                ),
+                "verification_score": round(
+                    score,
+                    3,
+                ),
+            })
+        else:
+            rejected.append({
+                "fact": fact,
+                "evidence": evidence,
+                "reason": (
+                    "Evidence could not be "
+                    "strongly matched to source."
+                ),
+                "verification_score": round(
+                    score,
+                    3,
+                ),
+            })
+
+    return verified, rejected
+
+
+# ---------------------------------------------------------------------------
+# EDITORIAL SCORING
+# ---------------------------------------------------------------------------
+
+def clamp_score(value):
+    try:
+        return max(
+            0.0,
+            min(
+                10.0,
+                float(value),
+            ),
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+
+def calculate_editorial_score(
+    brief,
+    source_text,
+    published,
+):
+    reader_value = clamp_score(
+        brief.get("reader_value_score", 0)
+    )
+
+    novelty = clamp_score(
+        brief.get("novelty_score", 0)
+    )
+
+    search_value = clamp_score(
+        brief.get("search_value_score", 0)
+    )
+
+    commercial_relevance = clamp_score(
+        brief.get(
+            "commercial_relevance_score",
+            0,
+        )
+    )
+
+    source_strength = clamp_score(
+        brief.get(
+            "source_strength_score",
+            0,
+        )
+    )
+
+    content_depth = clamp_score(
+        brief.get(
+            "content_depth_score",
+            0,
+        )
+    )
+
+    freshness = freshness_score(
+        published
+    )
+
+    evidence_count = len(
+        brief.get(
+            "evidence_ledger",
+            [],
+        )
+    )
+
+    evidence_bonus = min(
+        evidence_count / 12 * 1.0,
+        1.0,
+    )
+
+    score = (
+        reader_value * 0.25
+        + novelty * 0.15
+        + search_value * 0.15
+        + commercial_relevance * 0.10
+        + source_strength * 0.15
+        + content_depth * 0.10
+        + freshness * 0.10
+        + evidence_bonus
+    )
+
+    return round(
+        min(score, 10.0),
+        2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# EDITORIAL INTELLIGENCE
+# ---------------------------------------------------------------------------
+
+def analyze_story(
+    topic_title,
+    source_name,
+    source_text,
+    published="",
+):
     if len(source_text) < MIN_SOURCE_CHARS:
         return {
             "publish_decision": False,
-            "story_summary": "",
-            "important_facts": [],
             "evidence_ledger": [],
-            "reader_problem_or_interest": "",
-            "why_it_matters": "",
-            "who_should_care": "",
-            "missing_context": [
-                "The source page did not provide enough extractable text."
-            ],
-            "unsupported_claims_to_avoid": [],
-            "useful_angle": "",
-            "article_type": "news_explainer",
-            "search_intent": "",
-            "primary_keyword": "",
-            "secondary_keywords": [],
-            "content_gap": "",
-            "hook_strategy": "",
-            "reader_questions": [],
-            "engagement_strategy": "",
-            "headline_options": [],
-            "commercial_intent": "low",
-            "evergreen_potential": 0,
             "topic_score": 0,
-            "reason_if_rejected": "Insufficient source material.",
+            "reason_if_rejected": (
+                "Insufficient source material."
+            ),
         }
 
     prompt = f"""
 You are the editorial intelligence layer for AIToolNotes.
 
-Your job is to decide whether this source contains a useful story and create
-a factual, reader-focused editorial brief for a later writer.
-
 Do NOT write the article.
+
+Analyze only the supplied source.
 
 SOURCE NAME:
 {source_name}
@@ -386,7 +988,7 @@ SOURCE NAME:
 RSS TITLE:
 {topic_title}
 
-PUBLISHED DATE:
+PUBLISHED:
 {published or "unknown"}
 
 SOURCE TEXT:
@@ -394,7 +996,9 @@ SOURCE TEXT:
 {source_text}
 <END_SOURCE>
 
-Return ONLY valid JSON with exactly these keys:
+Return ONLY valid JSON.
+
+Use exactly these keys:
 
 {{
   "publish_decision": true,
@@ -407,79 +1011,132 @@ Return ONLY valid JSON with exactly these keys:
       "confidence": "high"
     }}
   ],
+
   "reader_problem_or_interest": "",
   "why_it_matters": "",
   "who_should_care": "",
   "missing_context": [],
   "unsupported_claims_to_avoid": [],
+
   "useful_angle": "",
   "article_type": "news_explainer",
+
   "search_intent": "",
   "primary_keyword": "",
   "secondary_keywords": [],
   "content_gap": "",
+
   "hook_strategy": "",
   "reader_questions": [],
-  "engagement_strategy": "",
+  "engagement_strategy": [],
+
   "headline_options": [],
+
   "commercial_intent": "low",
   "evergreen_potential": 0,
-  "topic_score": 0,
+
+  "reader_value_score": 0,
+  "novelty_score": 0,
+  "search_value_score": 0,
+  "commercial_relevance_score": 0,
+  "source_strength_score": 0,
+  "content_depth_score": 0,
+
   "reason_if_rejected": ""
 }}
 
-Allowed article_type:
-news_explainer, practical_guide, tool_review, comparison, roundup, analysis
+Allowed article types:
+news_explainer
+practical_guide
+tool_review
+comparison
+roundup
+analysis
 
-Allowed commercial_intent:
-low, medium, high
+Allowed commercial intent:
+low
+medium
+high
 
 Rules:
 
-1. Every factual item must be directly supported by the supplied source.
-2. Every evidence_ledger item must contain a concise excerpt from the source.
+1. Every factual item must be supported by the source.
+
+2. Every evidence ledger item must contain a short,
+   near-verbatim excerpt from the supplied source.
+
 3. Do not invent evidence.
-4. Do not turn the headline into a fact unless the body supports it.
-5. Never invent product names, models, APIs, pricing, dates, statistics,
-   benchmarks, hardware requirements, integrations, partnerships, quotes,
-   user counts, availability, or technical capabilities.
-6. Treat company promotional claims as claims by the company, not independent
-   verification.
-7. Do not use outside knowledge to fill missing information.
-8. Reject thin, contradictory, inaccessible, navigation-heavy, or useless
-   sources.
-9. A useful story should answer what happened and why a reader should care.
-10. search_intent should describe the likely user intent, such as:
-    informational, navigational, commercial_investigation, transactional,
-    or mixed.
-11. primary_keyword must be a natural search phrase supported by the story.
-12. secondary_keywords should be closely related phrases, not keyword spam.
-13. content_gap should describe what a useful article can clarify beyond a
-    basic source announcement, without inventing facts.
-14. hook_strategy should describe how the first paragraph should earn attention.
-15. reader_questions should contain 2-5 questions the article should answer
-    when the source supports them.
-16. engagement_strategy should describe useful ways to keep the reader engaged.
-17. headline_options must contain 3-5 accurate, curiosity-driven headlines.
-    Do not use clickbait, fake urgency, or unsupported claims.
-18. Headlines should generally be under 70 characters when possible.
-19. evergreen_potential is 0-10.
-20. topic_score is 0-10 and should reflect reader value, novelty, search
-    usefulness, commercial relevance, source strength, and content depth.
-21. Do not publish simply because a company announced something.
-22. Keep the evidence ledger to at most {MAX_SOURCE_FACTS} facts.
+
+4. Do not use outside knowledge.
+
+5. Never invent:
+   product names, APIs, prices, dates, statistics,
+   benchmarks, hardware requirements, integrations,
+   partnerships, quotes, users, availability,
+   capabilities, or performance.
+
+6. Company promotional claims must remain attributed.
+
+7. Reject thin or useless stories.
+
+8. Do not publish simply because a company announced something.
+
+9. The article must have a clear reader reason to exist.
+
+10. Search intent must be realistic.
+
+11. Keywords must be naturally supported.
+
+12. content_gap must explain what the article can clarify
+    without introducing outside facts.
+
+13. reader_questions must contain 2-5 supportable questions.
+
+14. headline_options must contain 3-5 accurate headlines.
+
+15. Headlines should generally be under 70 characters.
+
+16. Score each editorial dimension from 0-10.
+
+17. reader_value_score measures how useful the story is.
+
+18. novelty_score measures whether the development is genuinely
+    distinct from ordinary repeated AI news.
+
+19. search_value_score measures potential usefulness for people
+    actively searching for the topic.
+
+20. commercial_relevance_score measures whether the topic has
+    legitimate tool/business relevance, not whether it can be
+    artificially monetized.
+
+21. source_strength_score measures how complete and trustworthy
+    the supplied source material is.
+
+22. content_depth_score measures whether enough evidence exists
+    to create a useful article.
+
+23. Keep the evidence ledger to at most {MAX_SOURCE_FACTS} facts.
 """
 
-    result = extract_json_object(call_ai([
-        {
-            "role": "system",
-            "content": (
-                "You are a strict evidence editor and digital publisher. "
-                "Accuracy and reader value are more important than volume."
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ], 5000))
+    result = extract_json_object(
+        call_ai(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict evidence editor. "
+                        "Accuracy and reader value come before volume."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            5000,
+        )
+    )
 
     defaults = {
         "important_facts": [],
@@ -489,66 +1146,255 @@ Rules:
         "secondary_keywords": [],
         "reader_questions": [],
         "headline_options": [],
+        "engagement_strategy": [],
     }
 
     for key, default in defaults.items():
-        result.setdefault(key, default)
+        result.setdefault(
+            key,
+            default,
+        )
 
-    result["important_facts"] = result["important_facts"][:MAX_SOURCE_FACTS]
-    result["evidence_ledger"] = result["evidence_ledger"][:MAX_SOURCE_FACTS]
-    result["secondary_keywords"] = result["secondary_keywords"][:8]
-    result["reader_questions"] = result["reader_questions"][:5]
-    result["headline_options"] = result["headline_options"][:5]
+    raw_ledger = result.get(
+        "evidence_ledger",
+        [],
+    )
 
-    valid_ledger = []
+    raw_ledger = raw_ledger[
+        :MAX_SOURCE_FACTS
+    ]
 
-    for item in result["evidence_ledger"]:
-        if not isinstance(item, dict):
-            continue
+    verified_ledger, rejected_ledger = (
+        verify_evidence_ledger(
+            raw_ledger,
+            source_text,
+        )
+    )
 
-        fact = clean_text(item.get("fact"))
-        evidence = clean_text(item.get("evidence"))
-        confidence = clean_text(item.get("confidence")) or "medium"
+    result["evidence_ledger"] = (
+        verified_ledger
+    )
 
-        if fact and evidence:
-            valid_ledger.append({
-                "fact": fact[:500],
-                "evidence": evidence[:MAX_EVIDENCE_CHARS_PER_FACT],
-                "confidence": (
-                    confidence
-                    if confidence in {"high", "medium", "low"}
-                    else "medium"
-                ),
-            })
+    result["rejected_evidence"] = (
+        rejected_ledger
+    )
 
-    result["evidence_ledger"] = valid_ledger
+    result["important_facts"] = (
+        result["important_facts"]
+        [:MAX_SOURCE_FACTS]
+    )
 
-    try:
-        result["topic_score"] = float(result.get("topic_score", 0))
-    except (TypeError, ValueError):
-        result["topic_score"] = 0
+    result["secondary_keywords"] = (
+        result["secondary_keywords"]
+        [:8]
+    )
+
+    result["reader_questions"] = (
+        result["reader_questions"]
+        [:5]
+    )
+
+    result["headline_options"] = (
+        result["headline_options"]
+        [:5]
+    )
+
+    result["missing_context"] = (
+        result["missing_context"]
+        [:6]
+    )
+
+    result[
+        "unsupported_claims_to_avoid"
+    ] = (
+        result[
+            "unsupported_claims_to_avoid"
+        ][:8]
+    )
 
     try:
         result["evergreen_potential"] = int(
-            float(result.get("evergreen_potential", 0))
+            float(
+                result.get(
+                    "evergreen_potential",
+                    0,
+                )
+            )
         )
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         result["evergreen_potential"] = 0
 
-    if len(result["evidence_ledger"]) < 2:
+    result["evergreen_potential"] = max(
+        0,
+        min(
+            10,
+            result["evergreen_potential"],
+        ),
+    )
+
+    # Deterministic editorial score.
+    result["topic_score"] = (
+        calculate_editorial_score(
+            result,
+            source_text,
+            published,
+        )
+    )
+
+    if len(
+        result["evidence_ledger"]
+    ) < 2:
         result["publish_decision"] = False
+
         result["reason_if_rejected"] = (
-            "The source did not yield enough traceable facts."
+            "Not enough independently "
+            "verified source evidence."
         )
 
     if result["topic_score"] < MIN_EDITORIAL_SCORE:
         result["publish_decision"] = False
+
         result["reason_if_rejected"] = (
-            result.get("reason_if_rejected")
-            or "Editorial value score is below the publishing threshold."
+            result.get(
+                "reason_if_rejected"
+            )
+            or "Editorial score below threshold."
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# SOURCE PASSAGES
+# ---------------------------------------------------------------------------
+
+def split_source_passages(
+    source_text,
+    max_passages=10,
+):
+    text = clean_text(
+        source_text
+    )
+
+    if not text:
+        return []
+
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        text,
+    )
+
+    passages = []
+
+    current = ""
+
+    for sentence in sentences:
+        sentence = clean_text(
+            sentence
+        )
+
+        if not sentence:
+            continue
+
+        if len(current) + len(sentence) > 700:
+            if current:
+                passages.append(
+                    current.strip()
+                )
+
+            current = sentence
+
+        else:
+            current += " " + sentence
+
+    if current:
+        passages.append(
+            current.strip()
+        )
+
+    return passages[
+        :max_passages
+    ]
+
+
+def relevant_source_passages(
+    source_text,
+    editorial_brief,
+    max_passages=8,
+):
+    passages = split_source_passages(
+        source_text,
+        max_passages=50,
+    )
+
+    query = (
+        editorial_brief.get(
+            "primary_keyword",
+            "",
+        )
+        + " "
+        + editorial_brief.get(
+            "useful_angle",
+            "",
+        )
+        + " "
+        + " ".join(
+            editorial_brief.get(
+                "secondary_keywords",
+                [],
+            )
+        )
+    )
+
+    query_tokens = keyword_tokens(
+        query
+    )
+
+    scored = []
+
+    for passage in passages:
+        passage_tokens = keyword_tokens(
+            passage
+        )
+
+        if not passage_tokens:
+            continue
+
+        overlap = len(
+            query_tokens
+            & passage_tokens
+        )
+
+        score = overlap / max(
+            len(query_tokens),
+            1,
+        )
+
+        scored.append(
+            (
+                score,
+                passage,
+            )
+        )
+
+    scored.sort(
+        key=lambda x: x[0],
+        reverse=True,
+    )
+
+    selected = []
+
+    for _, passage in scored:
+        if passage not in selected:
+            selected.append(passage)
+
+        if len(selected) >= max_passages:
+            break
+
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +1404,14 @@ Rules:
 def compact_writer_context(
     source_text,
     editorial_brief,
-    max_source_chars=5500,
-    max_facts=9,
+    max_facts=10,
 ):
-    ledger = editorial_brief.get("evidence_ledger", [])
+    ledger = (
+        editorial_brief.get(
+            "evidence_ledger",
+            [],
+        )
+    )
 
     compact_ledger = []
 
@@ -569,63 +1419,233 @@ def compact_writer_context(
         if not isinstance(item, dict):
             continue
 
-        fact = clean_text(item.get("fact"))
-        evidence = clean_text(item.get("evidence"))
-        confidence = clean_text(item.get("confidence")) or "medium"
+        fact = clean_text(
+            item.get("fact")
+        )
+
+        evidence = clean_text(
+            item.get("evidence")
+        )
+
+        confidence = clean_text(
+            item.get("confidence")
+        ) or "medium"
 
         if fact and evidence:
             compact_ledger.append({
-                "fact": fact[:350],
+                "fact": fact[:400],
                 "evidence": evidence[:300],
                 "confidence": confidence[:20],
             })
 
+    passages = relevant_source_passages(
+        source_text,
+        editorial_brief,
+        max_passages=8,
+    )
+
     compact_brief = {
-        "story_summary": editorial_brief.get("story_summary", ""),
-        "reader_problem_or_interest": editorial_brief.get(
-            "reader_problem_or_interest", ""
-        ),
-        "why_it_matters": editorial_brief.get("why_it_matters", ""),
-        "who_should_care": editorial_brief.get("who_should_care", ""),
-        "useful_angle": editorial_brief.get("useful_angle", ""),
-        "article_type": editorial_brief.get(
-            "article_type",
-            "news_explainer",
-        ),
-        "search_intent": editorial_brief.get("search_intent", ""),
-        "primary_keyword": editorial_brief.get("primary_keyword", ""),
-        "secondary_keywords": editorial_brief.get(
-            "secondary_keywords",
-            [],
-        )[:8],
-        "content_gap": editorial_brief.get("content_gap", ""),
-        "hook_strategy": editorial_brief.get("hook_strategy", ""),
-        "reader_questions": editorial_brief.get(
-            "reader_questions",
-            [],
-        )[:5],
-        "engagement_strategy": editorial_brief.get(
-            "engagement_strategy",
+        "story_summary": editorial_brief.get(
+            "story_summary",
             "",
         ),
-        "headline_options": editorial_brief.get(
-            "headline_options",
-            [],
-        )[:5],
-        "missing_context": editorial_brief.get(
-            "missing_context",
-            [],
-        )[:4],
-        "unsupported_claims_to_avoid": editorial_brief.get(
-            "unsupported_claims_to_avoid",
-            [],
-        )[:6],
-        "evidence_ledger": compact_ledger,
+        "reader_problem_or_interest":
+            editorial_brief.get(
+                "reader_problem_or_interest",
+                "",
+            ),
+        "why_it_matters":
+            editorial_brief.get(
+                "why_it_matters",
+                "",
+            ),
+        "who_should_care":
+            editorial_brief.get(
+                "who_should_care",
+                "",
+            ),
+        "useful_angle":
+            editorial_brief.get(
+                "useful_angle",
+                "",
+            ),
+        "article_type":
+            editorial_brief.get(
+                "article_type",
+                "news_explainer",
+            ),
+        "search_intent":
+            editorial_brief.get(
+                "search_intent",
+                "",
+            ),
+        "primary_keyword":
+            editorial_brief.get(
+                "primary_keyword",
+                "",
+            ),
+        "secondary_keywords":
+            editorial_brief.get(
+                "secondary_keywords",
+                [],
+            )[:8],
+        "content_gap":
+            editorial_brief.get(
+                "content_gap",
+                "",
+            ),
+        "hook_strategy":
+            editorial_brief.get(
+                "hook_strategy",
+                "",
+            ),
+        "reader_questions":
+            editorial_brief.get(
+                "reader_questions",
+                [],
+            )[:5],
+        "engagement_strategy":
+            editorial_brief.get(
+                "engagement_strategy",
+                [],
+            )[:5],
+        "headline_options":
+            editorial_brief.get(
+                "headline_options",
+                [],
+            )[:5],
+        "missing_context":
+            editorial_brief.get(
+                "missing_context",
+                [],
+            )[:5],
+        "unsupported_claims_to_avoid":
+            editorial_brief.get(
+                "unsupported_claims_to_avoid",
+                [],
+            )[:8],
+        "evidence_ledger":
+            compact_ledger,
     }
 
-    source_excerpt = clean_text(source_text or "")[:max_source_chars]
+    return (
+        compact_brief,
+        passages,
+    )
 
-    return compact_brief, source_excerpt
+
+# ---------------------------------------------------------------------------
+# HEADLINE SELECTION
+# ---------------------------------------------------------------------------
+
+def headline_candidate_score(
+    headline,
+    brief,
+):
+    headline = clean_text(
+        headline
+    )
+
+    if not headline:
+        return -999
+
+    score = 0.0
+
+    length = len(headline)
+
+    if length <= 60:
+        score += 2.0
+    elif length <= 70:
+        score += 1.5
+    elif length <= 85:
+        score += 0.5
+    elif length > 100:
+        score -= 3.0
+
+    keyword = clean_text(
+        brief.get(
+            "primary_keyword",
+            "",
+        )
+    ).lower()
+
+    if keyword and keyword in headline.lower():
+        score += 2.0
+
+    tokens = keyword_tokens(
+        headline
+    )
+
+    if len(tokens) >= 5:
+        score += 1.0
+
+    # Avoid obvious clickbait.
+    banned = [
+        "shocking",
+        "you won't believe",
+        "insane",
+        "game-changing",
+        "revolutionary",
+        "guaranteed",
+        "secret",
+        "destroy",
+        "finally!",
+    ]
+
+    for phrase in banned:
+        if phrase in headline.lower():
+            score -= 3.0
+
+    # Avoid unnecessary punctuation.
+    if headline.count("!") > 0:
+        score -= 1.0
+
+    return score
+
+
+def choose_headline(
+    brief,
+    fallback,
+):
+    options = brief.get(
+        "headline_options",
+        [],
+    )
+
+    cleaned = []
+
+    for option in options:
+        option = clean_text(option)
+
+        if not option:
+            continue
+
+        if len(option) > 100:
+            continue
+
+        if any(
+            option.lower() == old.lower()
+            for old in cleaned
+        ):
+            continue
+
+        cleaned.append(option)
+
+    if not cleaned:
+        return clean_text(
+            fallback
+        )
+
+    ranked = sorted(
+        cleaned,
+        key=lambda x: headline_candidate_score(
+            x,
+            brief,
+        ),
+        reverse=True,
+    )
+
+    return ranked[0]
 
 
 # ---------------------------------------------------------------------------
@@ -639,34 +1659,57 @@ def generate_article(
     source_text,
     editorial_brief,
     revision_feedback="",
+    previous_article="",
 ):
-    compact_brief, source_excerpt = compact_writer_context(
-        source_text,
-        editorial_brief,
+    compact_brief, source_passages = (
+        compact_writer_context(
+            source_text,
+            editorial_brief,
+        )
     )
 
-    feedback = ""
+    selected_headline = choose_headline(
+        editorial_brief,
+        topic_title,
+    )
+
+    revision_block = ""
 
     if revision_feedback:
-        feedback = f"""
-Previous quality feedback. Fix these issues without introducing any new facts:
+        revision_block = f"""
+QUALITY REVIEW TO FIX:
 
-{revision_feedback[:2600]}
+{revision_feedback[:4000]}
 """
 
-    selected_headline = (
-        editorial_brief.get("headline_options") or [topic_title]
-    )[0]
+    previous_article_block = ""
+
+    if previous_article:
+        previous_article_block = f"""
+PREVIOUS ARTICLE:
+
+<BEGIN_PREVIOUS_ARTICLE>
+{previous_article[:MAX_REVISION_ARTICLE_CHARS]}
+<END_PREVIOUS_ARTICLE>
+
+Revise this article rather than inventing a completely unrelated article.
+
+Preserve valid factual material.
+Remove unsupported claims.
+Improve only what the quality review identifies.
+"""
 
     prompt = f"""
-Write a genuinely useful AIToolNotes article using ONLY the supplied evidence.
+Write a genuinely useful AIToolNotes article.
 
-The evidence ledger is the factual boundary.
+The verified evidence ledger is the factual boundary.
+
+Do not use outside knowledge.
 
 ORIGINAL RSS TITLE:
 {topic_title}
 
-PREFERRED EDITORIAL HEADLINE:
+PREFERRED HEADLINE:
 {selected_headline}
 
 SOURCE:
@@ -676,60 +1719,101 @@ SOURCE URL:
 {source_url}
 
 EDITORIAL BRIEF:
-{json.dumps(compact_brief, ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(
+    compact_brief,
+    ensure_ascii=False,
+    separators=(",", ":"),
+)}
 
-SOURCE EXCERPT:
-<BEGIN_SOURCE>
-{source_excerpt}
-<END_SOURCE>
+VERIFIED SOURCE PASSAGES:
 
-{feedback}
+<BEGIN_PASSAGES>
+{json.dumps(
+    source_passages,
+    ensure_ascii=False,
+)}
+<END_PASSAGES>
+
+{revision_block}
+
+{previous_article_block}
 
 ARTICLE REQUIREMENTS:
 
-1. Output RAW HTML ONLY. No Markdown, no code fences, no H1.
-2. Use H2 and H3 headings where useful.
-3. The first paragraph must immediately tell the reader what changed and
-   why the story deserves attention.
-4. Do NOT start with generic phrases such as:
-   "In today's rapidly evolving AI landscape..."
-   "Artificial intelligence is changing..."
-   "As technology continues to advance..."
-5. Do not merely rewrite the source chronologically.
-6. Explain unfamiliar terms plainly.
-7. Prioritize reader questions and practical understanding.
-8. Use short paragraphs, bullets, numbered steps, or tables only when they
-   genuinely improve comprehension.
-9. Do not invent instructions for a product unless supported by the source.
-10. Do not claim personal testing or personal experience.
-11. Do not fabricate quotes.
-12. Do not repeat the same fact unnecessarily.
-13. Do not pad the article to reach a word count.
-14. Aim for {MIN_ARTICLE_WORDS}-{MAX_ARTICLE_WORDS} words only when the
-    evidence supports that length.
-15. End with a concrete, useful takeaway rather than generic filler.
-16. Naturally use the primary keyword and related terms where appropriate.
-    Never keyword-stuff.
-17. The article should answer the reader's likely search intent.
-18. If the source contains promotional claims, attribute them appropriately.
-19. Do not state that something is "the best", "revolutionary", "game-changing",
-    "guaranteed", or similar unless the supplied evidence directly supports
-    that wording and attribution is clear.
-20. Do not include a fabricated FAQ section. Only answer questions that the
-    source supports.
+1. Output RAW HTML ONLY.
+
+2. No Markdown.
+
+3. No code fences.
+
+4. No H1.
+
+5. Use H2/H3 where useful.
+
+6. The first paragraph must immediately explain
+   what happened and why it matters.
+
+7. Never use generic AI openings.
+
+8. Do not merely rewrite the source chronologically.
+
+9. Explain unfamiliar terms plainly.
+
+10. Answer the reader's likely questions.
+
+11. Use short paragraphs.
+
+12. Use lists or tables only when they improve clarity.
+
+13. Do not invent instructions.
+
+14. Do not claim personal testing.
+
+15. Do not fabricate quotes.
+
+16. Do not repeat facts unnecessarily.
+
+17. Do not pad the article.
+
+18. Target {MIN_ARTICLE_WORDS}-{MAX_ARTICLE_WORDS}
+    only when the evidence supports that length.
+
+19. End with a concrete takeaway.
+
+20. Use the primary keyword naturally.
+
+21. Never keyword-stuff.
+
+22. Attribute promotional claims.
+
+23. Do not use unsupported superlatives.
+
+24. Do not create a fake FAQ.
+
+25. Every factual claim must trace to the verified
+    evidence ledger or supplied source passages.
+
+26. If information is not supported, omit it.
+
 """
 
-    raw = call_ai([
-        {
-            "role": "system",
-            "content": (
-                "You are the senior writer of a trustworthy technology "
-                "publication. Write clearly, specifically, and naturally. "
-                "Stay strictly inside the supplied evidence boundary."
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ], 5000)
+    raw = call_ai(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are the senior writer of a "
+                    "trustworthy technology publication. "
+                    "Stay strictly inside the supplied evidence."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        6000,
+    )
 
     raw = re.sub(
         r"^```(?:html)?\s*",
@@ -737,25 +1821,49 @@ ARTICLE REQUIREMENTS:
         raw.strip(),
         flags=re.I,
     )
-    raw = re.sub(r"\s*```$", "", raw)
+
+    raw = re.sub(
+        r"\s*```$",
+        "",
+        raw,
+    )
 
     return raw.strip()
 
 
 # ---------------------------------------------------------------------------
-# DETERMINISTIC HTML VALIDATION
+# HTML VALIDATION / SANITIZATION
 # ---------------------------------------------------------------------------
 
 ALLOWED_TAGS = {
-    "p", "h2", "h3", "h4", "ul", "ol", "li", "strong", "em",
-    "a", "table", "thead", "tbody", "tr", "th", "td", "blockquote",
-    "br", "code", "pre"
+    "p",
+    "h2",
+    "h3",
+    "h4",
+    "ul",
+    "ol",
+    "li",
+    "strong",
+    "em",
+    "a",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "blockquote",
+    "br",
+    "code",
+    "pre",
 }
 
 
 def validate_and_clean_html(content):
     if not content:
-        return "", ["Article is empty."]
+        return "", [
+            "Article is empty."
+        ]
 
     content = re.sub(
         r"^```(?:html)?\s*",
@@ -763,59 +1871,160 @@ def validate_and_clean_html(content):
         content.strip(),
         flags=re.I,
     )
-    content = re.sub(r"\s*```$", "", content)
 
     content = re.sub(
-        r"<h1\b[^>]*>.*?</h1>",
+        r"\s*```$",
         "",
         content,
-        flags=re.I | re.S,
     )
 
-    soup = BeautifulSoup(content, "html.parser")
+    soup = BeautifulSoup(
+        content,
+        "html.parser",
+    )
+
     issues = []
 
+    # Remove unsafe tags.
     for tag in soup([
-        "script", "style", "iframe", "object", "embed", "form"
+        "script",
+        "style",
+        "iframe",
+        "object",
+        "embed",
+        "form",
+        "svg",
+        "math",
+        "canvas",
     ]):
         tag.decompose()
-        issues.append("Removed unsupported or unsafe HTML element.")
 
-    for comment in soup.find_all(string=lambda x: isinstance(x, Comment)):
+        issues.append(
+            "Removed unsupported or unsafe HTML element."
+        )
+
+    # Remove comments.
+    for comment in soup.find_all(
+        string=lambda x: isinstance(
+            x,
+            Comment,
+        )
+    ):
         comment.extract()
 
-    for tag in list(soup.find_all(True)):
+    # Remove H1.
+    for h1 in soup.find_all("h1"):
+        h1.decompose()
+
+        issues.append(
+            "Removed H1 heading."
+        )
+
+    # Remove unsupported tags.
+    for tag in list(
+        soup.find_all(True)
+    ):
         name = tag.name.lower()
 
         if name not in ALLOWED_TAGS:
             tag.unwrap()
-            issues.append(f"Removed unsupported HTML tag: {name}")
 
+            issues.append(
+                f"Removed unsupported HTML tag: {name}"
+            )
+
+    # Remove dangerous attributes.
+    for tag in soup.find_all(True):
+        allowed_attrs = set()
+
+        if tag.name == "a":
+            allowed_attrs = {
+                "href",
+                "rel",
+                "title",
+            }
+
+        for attr in list(
+            tag.attrs.keys()
+        ):
+            attr_lower = attr.lower()
+
+            if (
+                attr_lower.startswith("on")
+                or attr_lower not in allowed_attrs
+            ):
+                del tag.attrs[attr]
+
+    # Validate links.
     for a in soup.find_all("a"):
-        href = (a.get("href") or "").strip()
+        href = (
+            a.get("href") or ""
+        ).strip()
 
-        if not re.match(r"^https?://", href, flags=re.I):
+        if not re.match(
+            r"^https?://",
+            href,
+            flags=re.I,
+        ):
             a.unwrap()
-            issues.append("Removed an invalid link.")
+
+            issues.append(
+                "Removed an invalid link."
+            )
             continue
+
+        parsed = urlparse(href)
+
+        if parsed.scheme.lower() not in {
+            "http",
+            "https",
+        }:
+            a.unwrap()
+
+            issues.append(
+                "Removed unsafe link scheme."
+            )
+            continue
+
+        existing_rel = a.get(
+            "rel",
+            [],
+        )
+
+        if isinstance(
+            existing_rel,
+            str,
+        ):
+            existing_rel = (
+                existing_rel.split()
+            )
 
         a["rel"] = list(
             dict.fromkeys(
-                (a.get("rel") or []) + ["noopener"]
+                existing_rel
+                + ["noopener"]
             )
         )
 
+    # Validate tables.
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
 
-        if len(rows) < 1:
+        if not rows:
             table.decompose()
-            issues.append("Removed an empty table.")
+
+            issues.append(
+                "Removed empty table."
+            )
             continue
 
         max_cells = max(
             (
-                len(row.find_all(["th", "td"]))
+                len(
+                    row.find_all(
+                        ["th", "td"]
+                    )
+                )
                 for row in rows
             ),
             default=0,
@@ -823,29 +2032,105 @@ def validate_and_clean_html(content):
 
         if max_cells < 2:
             table.decompose()
-            issues.append("Removed a malformed table.")
 
-    text = clean_text(soup.get_text(" ", strip=True))
+            issues.append(
+                "Removed malformed table."
+            )
+
+    text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+    )
+
+    word_count = len(
+        text.split()
+    )
 
     if len(text) < 500:
-        issues.append("Article is too short to be useful.")
+        issues.append(
+            "Article is too short."
+        )
 
-    if not soup.find(["p", "ul", "ol", "table", "blockquote"]):
-        issues.append("Article has no recognizable content structure.")
+    if word_count > (
+        MAX_ARTICLE_WORDS + 250
+    ):
+        issues.append(
+            "Article exceeds reasonable maximum length."
+        )
+
+    if not soup.find(
+        ["p", "ul", "ol", "table", "blockquote"]
+    ):
+        issues.append(
+            "Article has no recognizable content structure."
+        )
 
     if not soup.find("h2"):
-        issues.append("Article has no H2 heading.")
+        issues.append(
+            "Article has no H2 heading."
+        )
 
-    return str(soup).strip(), issues
+    return (
+        str(soup).strip(),
+        issues,
+    )
 
 
 def count_words_from_html(content):
-    soup = BeautifulSoup(content or "", "html.parser")
-    return len(clean_text(soup.get_text(" ", strip=True)).split())
+    soup = BeautifulSoup(
+        content or "",
+        "html.parser",
+    )
+
+    return len(
+        clean_text(
+            soup.get_text(
+                " ",
+                strip=True,
+            )
+        ).split()
+    )
 
 
 # ---------------------------------------------------------------------------
-# FINAL FACT + QUALITY + ENGAGEMENT CHECK
+# QUALITY SCORING
+# ---------------------------------------------------------------------------
+
+def deterministic_quality_score(
+    result,
+):
+    weights = {
+        "accuracy_score": 0.30,
+        "usefulness_score": 0.20,
+        "engagement_score": 0.15,
+        "readability_score": 0.10,
+        "search_quality_score": 0.10,
+        "originality_score": 0.15,
+    }
+
+    score = 0.0
+
+    for field, weight in weights.items():
+        score += (
+            clamp_score(
+                result.get(
+                    field,
+                    0,
+                )
+            )
+            * weight
+        )
+
+    return round(
+        score,
+        2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# QUALITY / FACT CHECK
 # ---------------------------------------------------------------------------
 
 def quality_check(
@@ -857,20 +2142,26 @@ def quality_check(
     article_html,
     html_issues,
 ):
-    compact_brief, source_excerpt = compact_writer_context(
-        source_text,
-        editorial_brief,
-        max_source_chars=4200,
-        max_facts=9,
+    compact_brief, source_passages = (
+        compact_writer_context(
+            source_text,
+            editorial_brief,
+        )
     )
 
-    article_excerpt = (article_html or "")[:15000]
-    word_count = count_words_from_html(article_html)
+    word_count = count_words_from_html(
+        article_html
+    )
+
+    article_excerpt = (
+        article_html or ""
+    )[:18000]
 
     prompt = f"""
-You are the final evidence, quality, SEO, and engagement editor for AIToolNotes.
+You are the final evidence, quality,
+SEO, and engagement editor for AIToolNotes.
 
-Check whether the article is accurate, useful, readable, and worth publishing.
+Check this article against the supplied evidence.
 
 TOPIC:
 {topic_title}
@@ -885,15 +2176,23 @@ WORD COUNT:
 {word_count}
 
 EDITORIAL BRIEF:
-{json.dumps(compact_brief, ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(
+    compact_brief,
+    ensure_ascii=False,
+    separators=(",", ":"),
+)}
 
-SOURCE EXCERPT:
-<BEGIN_SOURCE>
-{source_excerpt}
-<END_SOURCE>
+VERIFIED SOURCE PASSAGES:
+{json.dumps(
+    source_passages,
+    ensure_ascii=False,
+)}
 
 DETERMINISTIC HTML ISSUES:
-{json.dumps(html_issues, ensure_ascii=False)}
+{json.dumps(
+    html_issues,
+    ensure_ascii=False,
+)}
 
 ARTICLE:
 <BEGIN_ARTICLE>
@@ -903,67 +2202,118 @@ ARTICLE:
 Return ONLY valid JSON:
 
 {{
-  "publish": false,
-  "score": 0,
   "accuracy_score": 0,
   "usefulness_score": 0,
   "engagement_score": 0,
   "readability_score": 0,
   "search_quality_score": 0,
   "originality_score": 0,
+
   "issues": [],
   "unsupported_claims": [],
   "missing_value": [],
   "style_issues": [],
   "engagement_issues": [],
   "seo_issues": [],
+
   "revision_instructions": ""
 }}
 
-Scoring:
-- accuracy: factual support and attribution
-- usefulness: answers the reader's actual need
-- engagement: strong opening, specificity, information flow, curiosity,
-  concrete takeaways, and absence of filler
-- readability: structure, paragraph length, clarity, and natural prose
-- search quality: satisfies likely search intent without keyword stuffing
-- originality: adds useful organization/interpretation rather than merely
-  repeating the source
+Score every dimension from 0-10.
 
 Rules:
 
-1. Every concrete factual claim must be supported by the supplied evidence.
-2. Numbers, names, APIs, prices, dates, specs, availability, quotes,
-   partnerships, performance claims, and technical capabilities require direct
-   support.
-3. Flag invented facts, fake experience, fabricated quotes, misleading
-   certainty, unsupported instructions, repetition, and generic filler.
-4. Flag generic AI openings and conclusions.
-5. Respect deterministic HTML issues.
-6. The article should not be rejected merely because it is concise if it is
-   genuinely useful.
-7. If the article is below 500 words, normally flag missing value unless the
-   evidence is genuinely limited.
-8. Do not demand facts that are absent from the source.
-9. A strong article should have a reason to continue reading beyond the first
-   paragraph.
-10. Publish only when:
-    - score >= {MIN_QUALITY_SCORE}
-    - engagement_score >= {MIN_ENGAGEMENT_SCORE}
-    - there are no material unsupported claims
-    - there are no unresolved deterministic HTML issues
+1. Every concrete factual claim needs source support.
+
+2. Numbers, names, dates, APIs, prices, specifications,
+   availability, quotes, partnerships, performance claims,
+   and technical capabilities require direct evidence.
+
+3. Flag invented facts.
+
+4. Flag fabricated quotes.
+
+5. Flag fake personal experience.
+
+6. Flag unsupported instructions.
+
+7. Flag misleading certainty.
+
+8. Flag repetitive or generic filler.
+
+9. Flag generic openings and conclusions.
+
+10. Check whether the article answers the intended search query.
+
+11. Check whether the article provides useful organization
+    beyond simply repeating the source.
+
+12. Do not demand information absent from the source.
+
+13. Concise articles can pass if genuinely useful.
+
+14. Below 500 words normally indicates missing value,
+    unless the source itself is extremely limited.
+
+15. Deterministic HTML issues must be treated as unresolved
+    unless they were only harmless normalization.
+
+16. Do not invent problems just to justify a revision.
+
 """
 
-    result = extract_json_object(call_ai([
-        {
-            "role": "system",
-            "content": (
-                "You are a strict publication gate. Accuracy comes first, "
-                "but the publication must also provide genuine reader value."
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ], 3000))
+    result = extract_json_object(
+        call_ai(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict publication gate. "
+                        "Accuracy comes first."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            3500,
+        )
+    )
+
+    result["score"] = (
+        deterministic_quality_score(
+            result
+        )
+    )
+
+    try:
+        result["engagement_score"] = clamp_score(
+            result.get(
+                "engagement_score",
+                0,
+            )
+        )
+    except Exception:
+        result["engagement_score"] = 0.0
+
+    unsupported = result.get(
+        "unsupported_claims",
+        [],
+    )
+
+    material_unsupported = (
+        len(unsupported) > 0
+    )
+
+    result["publish"] = (
+        result["score"]
+        >= MIN_QUALITY_SCORE
+        and result["engagement_score"]
+        >= MIN_ENGAGEMENT_SCORE
+        and not material_unsupported
+        and not html_issues
+    )
 
     return result
 
@@ -981,31 +2331,47 @@ def revise_article(
     article_html,
     quality_result,
 ):
-    feedback = json.dumps({
-        "issues": quality_result.get("issues", []),
-        "unsupported_claims": quality_result.get(
-            "unsupported_claims", []
-        ),
-        "missing_value": quality_result.get(
-            "missing_value", []
-        ),
-        "style_issues": quality_result.get(
-            "style_issues", []
-        ),
-        "engagement_issues": quality_result.get(
-            "engagement_issues", []
-        ),
-        "seo_issues": quality_result.get(
-            "seo_issues", []
-        ),
-        "revision_instructions": quality_result.get(
-            "revision_instructions", ""
-        ),
-    }, ensure_ascii=False, indent=2)
+    feedback = json.dumps(
+        {
+            "issues": quality_result.get(
+                "issues",
+                [],
+            ),
+            "unsupported_claims":
+                quality_result.get(
+                    "unsupported_claims",
+                    [],
+                ),
+            "missing_value":
+                quality_result.get(
+                    "missing_value",
+                    [],
+                ),
+            "style_issues":
+                quality_result.get(
+                    "style_issues",
+                    [],
+                ),
+            "engagement_issues":
+                quality_result.get(
+                    "engagement_issues",
+                    [],
+                ),
+            "seo_issues":
+                quality_result.get(
+                    "seo_issues",
+                    [],
+                ),
+            "revision_instructions":
+                quality_result.get(
+                    "revision_instructions",
+                    "",
+                ),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
-    # The previous article is intentionally supplied through the revision
-    # instructions only indirectly. The writer regenerates from the same
-    # evidence boundary, reducing the chance of preserving bad claims.
     return generate_article(
         topic_title,
         source_name,
@@ -1013,126 +2379,333 @@ def revise_article(
         source_text,
         editorial_brief,
         revision_feedback=feedback,
+        previous_article=article_html,
     )
 
 
 # ---------------------------------------------------------------------------
-# LINK / MONETIZATION HELPERS
+# ARTICLE TEXT
 # ---------------------------------------------------------------------------
 
 def article_text(content):
-    soup = BeautifulSoup(content or "", "html.parser")
-    return clean_text(soup.get_text(" ", strip=True))
+    soup = BeautifulSoup(
+        content or "",
+        "html.parser",
+    )
+
+    return clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+    )
 
 
-def inject_contextual_affiliate_links(content, editorial_brief):
+# ---------------------------------------------------------------------------
+# AFFILIATE LINKS
+# ---------------------------------------------------------------------------
+
+def find_affiliate_match(
+    text,
+    aliases,
+):
+    lowered = text.lower()
+
+    for alias in sorted(
+        aliases,
+        key=len,
+        reverse=True,
+    ):
+        pattern = re.compile(
+            r"\b"
+            + re.escape(alias)
+            + r"\b",
+            re.I,
+        )
+
+        match = pattern.search(
+            lowered
+        )
+
+        if match:
+            return match
+
+    return None
+
+
+def inject_contextual_affiliate_links(
+    content,
+    editorial_brief,
+):
     """
-    Add at most one affiliate link per configured tool and only when the
-    article actually discusses that tool. Existing anchors are not replaced.
+    Safely adds at most one affiliate link per configured tool.
+
+    Only links a tool when the article actually discusses it.
+    Existing anchors are not replaced.
     """
+
     if not content:
         return content
 
-    soup = BeautifulSoup(content, "html.parser")
-    article_plain = article_text(content).lower()
+    soup = BeautifulSoup(
+        content,
+        "html.parser",
+    )
 
     for tool, url in AFFILIATE_LINKS.items():
-        if not url or tool.lower() not in article_plain:
+        if not url:
             continue
 
-        # Avoid linking if this tool is already linked.
-        already_linked = any(
-            tool.lower() in clean_text(a.get_text(" ", strip=True)).lower()
-            for a in soup.find_all("a")
+        aliases = AFFILIATE_ALIASES.get(
+            tool,
+            [tool],
         )
+
+        # Check article text.
+        plain_text = article_text(
+            str(soup)
+        )
+
+        match = find_affiliate_match(
+            plain_text,
+            aliases,
+        )
+
+        if not match:
+            continue
+
+        # Do not inject another link if this tool
+        # is already represented by an anchor.
+        already_linked = False
+
+        for anchor in soup.find_all("a"):
+            anchor_text = clean_text(
+                anchor.get_text(
+                    " ",
+                    strip=True,
+                )
+            ).lower()
+
+            for alias in aliases:
+                if alias.lower() in anchor_text:
+                    already_linked = True
+                    break
+
+            if already_linked:
+                break
 
         if already_linked:
             continue
 
-        pattern = re.compile(
-            r"\b(" + re.escape(tool) + r")\b",
-            re.I,
-        )
+        # Safely inspect text nodes.
+        injected = False
 
-        for text_node in list(soup.find_all(string=pattern)):
-            if text_node.parent.name == "a":
+        for text_node in list(
+            soup.find_all(
+                string=True
+            )
+        ):
+            if not isinstance(
+                text_node,
+                NavigableString,
+            ):
                 continue
 
-            match = pattern.search(str(text_node))
-            if not match:
+            parent = text_node.parent
+
+            if not parent:
                 continue
 
-            before = str(text_node)[:match.start()]
-            matched = match.group(1)
-            after = str(text_node)[match.end():]
+            if parent.name == "a":
+                continue
+
+            node_text = str(
+                text_node
+            )
+
+            node_match = (
+                find_affiliate_match(
+                    node_text,
+                    aliases,
+                )
+            )
+
+            if not node_match:
+                continue
+
+            start = node_match.start()
+            end = node_match.end()
+
+            before = node_text[:start]
+            matched = node_text[
+                start:end
+            ]
+            after = node_text[end:]
+
+            fragment = []
+
+            if before:
+                fragment.append(
+                    NavigableString(
+                        before
+                    )
+                )
 
             anchor = soup.new_tag(
                 "a",
                 href=url,
-                rel=["nofollow", "sponsored", "noopener"],
             )
+
+            anchor["rel"] = [
+                "nofollow",
+                "sponsored",
+                "noopener",
+            ]
+
             anchor.string = matched
 
-            text_node.replace_with(
-                BeautifulSoup(
-                    before,
-                    "html.parser",
-                )
-            )
-            text_node.parent.insert_after(
-                anchor
-            )
+            fragment.append(anchor)
 
             if after:
-                anchor.insert_after(
-                    BeautifulSoup(after, "html.parser")
+                fragment.append(
+                    NavigableString(
+                        after
+                    )
                 )
 
+            # Replace the original node with
+            # properly attached fragments.
+            for item in reversed(
+                fragment
+            ):
+                text_node.insert_after(
+                    item
+                )
+
+            text_node.extract()
+
+            injected = True
             break
+
+        if injected:
+            continue
 
     return str(soup)
 
 
-def keyword_tokens(text):
-    words = re.findall(r"[a-z0-9]{3,}", (text or "").lower())
+# ---------------------------------------------------------------------------
+# INTERNAL LINKS
+# ---------------------------------------------------------------------------
 
-    stopwords = {
-        "the", "and", "for", "with", "that", "this", "from", "into",
-        "about", "what", "when", "where", "which", "will", "could",
-        "have", "has", "how", "new", "your", "you", "are", "its",
-        "their", "they", "than", "more", "after", "before", "using",
-        "tool", "tools", "ai", "artificial", "intelligence",
-    }
+def internal_link_relevance(
+    new_article,
+    candidate,
+):
+    new_text = (
+        new_article.get(
+            "primary_keyword",
+            "",
+        )
+        + " "
+        + " ".join(
+            new_article.get(
+                "secondary_keywords",
+                [],
+            )
+        )
+        + " "
+        + new_article.get(
+            "useful_angle",
+            "",
+        )
+        + " "
+        + new_article.get(
+            "article_type",
+            "",
+        )
+    )
 
-    return {w for w in words if w not in stopwords}
+    old_text = (
+        candidate.get(
+            "title",
+            "",
+        )
+        + " "
+        + candidate.get(
+            "primary_keyword",
+            "",
+        )
+        + " "
+        + " ".join(
+            candidate.get(
+                "secondary_keywords",
+                [],
+            )
+        )
+        + " "
+        + candidate.get(
+            "useful_angle",
+            "",
+        )
+        + " "
+        + candidate.get(
+            "article_type",
+            "",
+        )
+    )
 
-
-def internal_link_relevance(new_article, candidate):
     new_tokens = keyword_tokens(
-        new_article.get("primary_keyword", "")
-        + " "
-        + " ".join(new_article.get("secondary_keywords", []))
-        + " "
-        + " ".join(new_article.get("topics", []))
+        new_text
     )
 
     old_tokens = keyword_tokens(
-        candidate.get("title", "")
-        + " "
-        + candidate.get("primary_keyword", "")
-        + " "
-        + " ".join(candidate.get("secondary_keywords", []))
-        + " "
-        + " ".join(candidate.get("topics", []))
+        old_text
     )
 
     if not new_tokens or not old_tokens:
         return 0.0
 
-    overlap = len(new_tokens & old_tokens)
-    union = len(new_tokens | old_tokens)
+    overlap = len(
+        new_tokens & old_tokens
+    )
 
-    return overlap / union if union else 0.0
+    union = len(
+        new_tokens | old_tokens
+    )
+
+    score = (
+        overlap / union
+        if union
+        else 0.0
+    )
+
+    # Extra title/keyword relevance bonus.
+    primary = clean_text(
+        new_article.get(
+            "primary_keyword",
+            "",
+        )
+    ).lower()
+
+    candidate_text = clean_text(
+        candidate.get(
+            "title",
+            "",
+        )
+        + " "
+        + candidate.get(
+            "primary_keyword",
+            "",
+        )
+    ).lower()
+
+    if primary and primary in candidate_text:
+        score += 0.15
+
+    return min(
+        score,
+        1.0,
+    )
 
 
 def inject_internal_links(
@@ -1143,20 +2716,27 @@ def inject_internal_links(
 ):
     candidates = []
 
-    for p in posted_history:
-        if not isinstance(p, dict):
+    for post in posted_history:
+        if not isinstance(
+            post,
+            dict,
+        ):
             continue
 
-        if not p.get("post_url"):
+        post_url = post.get(
+            "post_url"
+        )
+
+        if not post_url:
             continue
 
-        if p.get("link") == current_link:
+        if post.get("link") == current_link:
             continue
 
-        if not p.get("title"):
+        if not post.get("title"):
             continue
 
-        candidates.append(p)
+        candidates.append(post)
 
     if not candidates:
         return content
@@ -1168,58 +2748,176 @@ def inject_internal_links(
             editorial_brief,
             candidate,
         )
-        scored.append((score, candidate))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+        scored.append(
+            (
+                score,
+                candidate,
+            )
+        )
+
+    scored.sort(
+        key=lambda x: x[0],
+        reverse=True,
+    )
 
     picks = [
         candidate
-        for score, candidate in scored[:INTERNAL_LINKS_PER_POST]
-        if score > 0
+        for score, candidate
+        in scored[
+            :INTERNAL_LINKS_PER_POST
+        ]
+        if score >= 0.08
     ]
 
     if not picks:
         return content
 
-    links_html = "".join(
-        f'<li><a href="{html.escape(p["post_url"], quote=True)}">'
-        f'{html.escape(p["title"])}'
-        f'</a></li>'
-        for p in picks
+    links_html = ""
+
+    for candidate in picks:
+        safe_url = html.escape(
+            candidate["post_url"],
+            quote=True,
+        )
+
+        safe_title = html.escape(
+            candidate["title"]
+        )
+
+        links_html += (
+            f'<li><a href="{safe_url}" '
+            f'rel="noopener">'
+            f'{safe_title}'
+            f'</a></li>'
+        )
+
+    return (
+        content
+        + "<h2>Related reading</h2>"
+        + f"<ul>{links_html}</ul>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SOURCE ATTRIBUTION
+# ---------------------------------------------------------------------------
+
+def append_source_attribution(
+    content,
+    source_name,
+    source_url,
+):
+    if not source_url:
+        return content
+
+    escaped_name = html.escape(
+        source_name
+        or "the original source"
+    )
+
+    escaped_url = html.escape(
+        source_url,
+        quote=True,
+    )
+
+    attribution = (
+        "<h2>Source</h2>"
+        "<p>"
+        "This article is based on information "
+        "published by "
+        f'<a href="{escaped_url}" '
+        'rel="nofollow noopener">'
+        f"{escaped_name}"
+        "</a>."
+        "</p>"
     )
 
     return (
         content
-        + f"<h2>Related reading</h2><ul>{links_html}</ul>"
+        + attribution
     )
 
 
-def append_source_attribution(content, source_name, source_url):
-    if not source_url:
-        return content
+# ---------------------------------------------------------------------------
+# FINAL ENRICHMENT VALIDATION
+# ---------------------------------------------------------------------------
 
-    escaped_name = html.escape(source_name or "the original source")
-    escaped_url = html.escape(source_url, quote=True)
+def final_content_validation(
+    content,
+    source_url,
+):
+    issues = []
 
-    attribution = (
-        '<h2>Source</h2>'
-        '<p>'
-        'This article is based on information published by '
-        f'<a href="{escaped_url}" '
-        'rel="nofollow noopener">'
-        f'{escaped_name}'
-        '</a>.'
-        '</p>'
+    soup = BeautifulSoup(
+        content or "",
+        "html.parser",
     )
 
-    return content + attribution
+    # No scripts.
+    if soup.find(
+        [
+            "script",
+            "iframe",
+            "object",
+            "embed",
+        ]
+    ):
+        issues.append(
+            "Unsafe HTML remains after enrichment."
+        )
+
+    # Check source link.
+    if source_url:
+        source_links = [
+            a.get("href")
+            for a in soup.find_all("a")
+        ]
+
+        if source_url not in source_links:
+            issues.append(
+                "Source attribution link missing."
+            )
+
+    # Check duplicate identical hrefs.
+    hrefs = [
+        (
+            a.get("href") or ""
+        ).strip()
+        for a in soup.find_all("a")
+    ]
+
+    # Identical links are allowed when intentional,
+    # but flag suspicious excessive repetition.
+    for href in set(hrefs):
+        if href and hrefs.count(href) > 4:
+            issues.append(
+                f"Excessive repeated link: {href}"
+            )
+
+    # No javascript/data links.
+    for href in hrefs:
+        if re.match(
+            r"^(javascript|data|vbscript):",
+            href,
+            flags=re.I,
+        ):
+            issues.append(
+                "Unsafe URL scheme detected."
+            )
+
+    return issues
 
 
 # ---------------------------------------------------------------------------
 # BLOGGER PUBLISH
 # ---------------------------------------------------------------------------
 
-def post_to_blogger(service, title, content):
+def post_to_blogger(
+    service,
+    title,
+    content,
+):
     result = (
         service.posts()
         .insert(
@@ -1234,8 +2932,14 @@ def post_to_blogger(service, title, content):
         .execute()
     )
 
-    url = result.get("url", "")
-    print(f"  Posted to Blogger: {url}")
+    url = result.get(
+        "url",
+        "",
+    )
+
+    print(
+        f"  Posted to Blogger: {url}"
+    )
 
     return result, url
 
@@ -1246,17 +2950,32 @@ def post_to_blogger(service, title, content):
 
 def load_posted_history():
     try:
-        with open(POSTED_FILE, "r", encoding="utf-8") as f:
+        with open(
+            POSTED_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
             data = json.load(f)
 
-        return data if isinstance(data, list) else []
+        return (
+            data
+            if isinstance(
+                data,
+                list,
+            )
+            else []
+        )
 
     except Exception:
         return []
 
 
 def save_posted_history(posted):
-    with open(POSTED_FILE, "w", encoding="utf-8") as f:
+    with open(
+        POSTED_FILE,
+        "w",
+        encoding="utf-8",
+    ) as f:
         json.dump(
             posted[-500:],
             f,
@@ -1266,82 +2985,31 @@ def save_posted_history(posted):
 
 
 # ---------------------------------------------------------------------------
-# HEADLINE SELECTION
+# CANDIDATE PRE-FILTER
 # ---------------------------------------------------------------------------
 
-def choose_headline(brief, fallback):
-    options = brief.get("headline_options", [])
-
-    cleaned = []
-
-    for option in options:
-        option = clean_text(option)
-
-        if not option:
-            continue
-
-        if option.lower() in {
-            x.lower() for x in cleaned
-        }:
-            continue
-
-        if len(option) > 100:
-            continue
-
-        cleaned.append(option)
-
-    if cleaned:
-        return cleaned[0]
-
-    return clean_text(fallback)
-
-
-# ---------------------------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------------------------
-
-def main():
-    print("AIToolNotes Intelligent Blog Automation v4 Starting...")
-    print(
-        "Mode: source -> editorial intelligence -> evidence -> "
-        "headline/SEO -> write -> HTML -> quality/engagement -> "
-        "revision -> links -> Blogger"
-    )
-
-    posted = load_posted_history()
-
-    posted_titles = {
-        p.get("title")
-        for p in posted
-        if isinstance(p, dict) and p.get("title")
-    }
-
-    posted_links = {
-        p.get("link")
-        for p in posted
-        if isinstance(p, dict) and p.get("link")
-    }
-
-    posted_titles.update(
-        p for p in posted
-        if isinstance(p, str)
-    )
-
-    service = get_blogger_service()
-
-    all_topics = collect_topics()
-
+def build_candidate_pool(
+    all_topics,
+    posted_titles,
+    posted_links,
+):
     seen_titles = set()
-    candidate_pool = []
-
-    candidate_buffer_limit = max(
-        MAX_POSTS_PER_RUN * CANDIDATE_BUFFER_MULTIPLIER,
-        8,
-    )
+    pool = []
 
     for topic in all_topics:
-        title = clean_text(topic.get("title", ""))
-        link = clean_text(topic.get("link", ""))
+        title = clean_text(
+            topic.get(
+                "title",
+                "",
+            )
+        )
+
+        link = clean_text(
+            topic.get(
+                "link",
+                "",
+            )
+        )
 
         if len(title) <= 15:
             continue
@@ -1352,33 +3020,130 @@ def main():
         if link and link in posted_links:
             continue
 
-        if is_obvious_duplicate(title, posted_titles):
+        if is_obvious_duplicate(
+            title,
+            posted_titles,
+        ):
+            continue
+
+        # Avoid obvious RSS junk.
+        lowered = title.lower()
+
+        junk_patterns = [
+            "subscribe",
+            "newsletter",
+            "podcast episode",
+            "weekly roundup",
+            "job opening",
+        ]
+
+        if any(
+            pattern in lowered
+            for pattern in junk_patterns
+        ):
             continue
 
         seen_titles.add(title)
-        candidate_pool.append(topic)
 
-        if len(candidate_pool) >= candidate_buffer_limit:
+        pool.append(topic)
+
+        if len(pool) >= RAW_CANDIDATE_LIMIT:
             break
 
+    return pool
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+
+def main():
     print(
-        f"\nCandidate pool: {len(candidate_pool)} "
-        f"(buffer: {candidate_buffer_limit})"
+        "AIToolNotes Intelligent Blog Automation v5 Starting..."
+    )
+
+    print(
+        "Mode: RSS -> source -> editorial intelligence -> "
+        "verified evidence -> writer -> quality gate -> "
+        "revision -> enrichment -> Blogger"
+    )
+
+    posted = load_posted_history()
+
+    posted_titles = {
+        p.get("title")
+        for p in posted
+        if isinstance(p, dict)
+        and p.get("title")
+    }
+
+    posted_links = {
+        p.get("link")
+        for p in posted
+        if isinstance(p, dict)
+        and p.get("link")
+    }
+
+    posted_titles.update(
+        p
+        for p in posted
+        if isinstance(p, str)
+    )
+
+    service = get_blogger_service()
+
+    all_topics = collect_topics()
+
+    candidate_pool = build_candidate_pool(
+        all_topics,
+        posted_titles,
+        posted_links,
+    )
+
+    print(
+        f"\nCandidate pool: {len(candidate_pool)}"
     )
 
     # -----------------------------------------------------------------------
-    # SOURCE VALIDATION + EDITORIAL SCORING
+    # SOURCE VALIDATION + EDITORIAL INTELLIGENCE
     # -----------------------------------------------------------------------
 
     analyzed_candidates = []
 
-    for topic_data in candidate_pool:
-        title = topic_data["title"]
-        link = topic_data.get("link", "")
+    for index, topic_data in enumerate(
+        candidate_pool[
+            :MAX_EDITORIAL_CANDIDATES
+        ],
+        1,
+    ):
+        title = topic_data[
+            "title"
+        ]
 
-        print(f"\nEvaluating source: {title[:100]}")
+        link = topic_data.get(
+            "link",
+            "",
+        )
 
-        source_text = fetch_source_article_text(link)
+        published = topic_data.get(
+            "published",
+            "",
+        )
+
+        print(
+            f"\nEvaluating "
+            f"{index}/{min(len(candidate_pool), MAX_EDITORIAL_CANDIDATES)}:"
+        )
+
+        print(
+            f"  {title[:110]}"
+        )
+
+        source_text = (
+            fetch_source_article_text(
+                link
+            )
+        )
 
         if len(source_text) < MIN_SOURCE_CHARS:
             print(
@@ -1390,50 +3155,88 @@ def main():
         try:
             brief = analyze_story(
                 title,
-                topic_data["source"],
+                topic_data[
+                    "source"
+                ],
                 source_text,
-                topic_data.get("published", ""),
+                published,
             )
+
         except Exception as e:
-            print(f"  SKIP: editorial analysis failed: {e}")
+            print(
+                f"  SKIP: editorial analysis failed: {e}"
+            )
             continue
 
-        score = float(brief.get("topic_score", 0) or 0)
+        score = clamp_score(
+            brief.get(
+                "topic_score",
+                0,
+            )
+        )
+
+        verified_evidence = len(
+            brief.get(
+                "evidence_ledger",
+                [],
+            )
+        )
 
         print(
-            f"  Editorial score: {score:.1f}/10 | "
-            f"Decision: "
+            f"  Editorial score: "
+            f"{score:.2f}/10"
+        )
+
+        print(
+            f"  Decision: "
             f"{'PUBLISHABLE' if brief.get('publish_decision') else 'SKIP'}"
         )
 
         print(
-            f"  Type: {brief.get('article_type', 'unknown')} | "
-            f"Intent: {brief.get('search_intent', 'unknown')}"
+            f"  Evidence verified: "
+            f"{verified_evidence}"
         )
 
         print(
-            f"  Commercial: {brief.get('commercial_intent', 'unknown')} | "
-            f"Evidence: {len(brief.get('evidence_ledger', []))}"
+            f"  Type: "
+            f"{brief.get('article_type', 'unknown')}"
         )
 
-        if not brief.get("publish_decision"):
+        print(
+            f"  Intent: "
+            f"{brief.get('search_intent', 'unknown')}"
+        )
+
+        if not brief.get(
+            "publish_decision"
+        ):
             print(
-                "  Skipped: "
-                f"{brief.get('reason_if_rejected', 'editorial gate')}"
+                "  Reason: "
+                + brief.get(
+                    "reason_if_rejected",
+                    "Editorial gate.",
+                )
             )
             continue
 
         analyzed_candidates.append(
-            (score, topic_data, source_text, brief)
+            (
+                score,
+                topic_data,
+                source_text,
+                brief,
+            )
         )
 
-    # Highest editorial-value candidates first.
+    # Highest deterministic editorial score first.
     analyzed_candidates.sort(
         key=lambda x: x[0],
         reverse=True,
     )
 
-    usable_topics = analyzed_candidates[:MAX_POSTS_PER_RUN]
+    usable_topics = analyzed_candidates[
+        :MAX_POSTS_PER_RUN
+    ]
 
     print(
         f"\nSelected {len(usable_topics)} article(s) "
@@ -1443,17 +3246,35 @@ def main():
     published_this_run = 0
 
     # -----------------------------------------------------------------------
-    # WRITE -> CHECK -> REVISE -> PUBLISH
+    # WRITE -> CHECK -> REVISE -> ENRICH -> PUBLISH
     # -----------------------------------------------------------------------
 
-    for i, (topic_score, topic_data, source_text, brief) in enumerate(
+    for i, (
+        topic_score,
+        topic_data,
+        source_text,
+        brief,
+    ) in enumerate(
         usable_topics,
         1,
     ):
-        original_title = topic_data["title"]
-        source = topic_data["source"]
-        source_url = topic_data.get("link", "")
-        published = topic_data.get("published", "")
+        original_title = topic_data[
+            "title"
+        ]
+
+        source = topic_data[
+            "source"
+        ]
+
+        source_url = topic_data.get(
+            "link",
+            "",
+        )
+
+        published = topic_data.get(
+            "published",
+            "",
+        )
 
         print(
             f"\nArticle {i}/{len(usable_topics)}: "
@@ -1466,8 +3287,13 @@ def main():
                 original_title,
             )
 
-            print(f"  Headline: {headline}")
-            print("  Writing evidence-constrained article...")
+            print(
+                f"  Headline: {headline}"
+            )
+
+            print(
+                "  Writing evidence-constrained article..."
+            )
 
             article = generate_article(
                 headline,
@@ -1477,15 +3303,24 @@ def main():
                 brief,
             )
 
-            article, html_issues = validate_and_clean_html(article)
-
-            print(
-                f"  Word count: {count_words_from_html(article)}"
+            article, html_issues = (
+                validate_and_clean_html(
+                    article
+                )
             )
 
             print(
-                f"  HTML check: "
-                f"{'PASS' if not html_issues else 'ISSUES FOUND'}"
+                f"  Word count: "
+                f"{count_words_from_html(article)}"
+            )
+
+            print(
+                "  HTML check: "
+                + (
+                    "PASS"
+                    if not html_issues
+                    else "ISSUES FOUND"
+                )
             )
 
             quality = quality_check(
@@ -1498,22 +3333,38 @@ def main():
                 html_issues,
             )
 
-            score = int(float(quality.get("score", 0) or 0))
-            engagement_score = int(
-                float(
-                    quality.get(
-                        "engagement_score",
-                        0,
-                    ) or 0
+            score = clamp_score(
+                quality.get(
+                    "score",
+                    0,
                 )
             )
 
-            publish = bool(quality.get("publish"))
+            engagement_score = clamp_score(
+                quality.get(
+                    "engagement_score",
+                    0,
+                )
+            )
+
+            publish = bool(
+                quality.get(
+                    "publish",
+                    False,
+                )
+            )
 
             print(
-                f"  Quality: {score}/10 | "
-                f"Engagement: {engagement_score}/10 | "
-                f"Publish: {publish}"
+                f"  Quality: {score:.2f}/10"
+            )
+
+            print(
+                f"  Engagement: "
+                f"{engagement_score:.2f}/10"
+            )
+
+            print(
+                f"  Publish: {publish}"
             )
 
             # ---------------------------------------------------------------
@@ -1527,7 +3378,9 @@ def main():
                 or html_issues
             ):
                 if MAX_REWRITE_ATTEMPTS:
-                    print("  Revising article once...")
+                    print(
+                        "  Revising article once..."
+                    )
 
                     article = revise_article(
                         headline,
@@ -1539,8 +3392,10 @@ def main():
                         quality,
                     )
 
-                    article, html_issues = validate_and_clean_html(
-                        article
+                    article, html_issues = (
+                        validate_and_clean_html(
+                            article
+                        )
                     )
 
                     quality = quality_check(
@@ -1553,30 +3408,45 @@ def main():
                         html_issues,
                     )
 
-                    score = int(
-                        float(
-                            quality.get("score", 0) or 0
+                    score = clamp_score(
+                        quality.get(
+                            "score",
+                            0,
                         )
                     )
 
-                    engagement_score = int(
-                        float(
-                            quality.get(
-                                "engagement_score",
-                                0,
-                            ) or 0
+                    engagement_score = clamp_score(
+                        quality.get(
+                            "engagement_score",
+                            0,
                         )
                     )
 
                     publish = bool(
-                        quality.get("publish")
+                        quality.get(
+                            "publish",
+                            False,
+                        )
                     )
 
                     print(
-                        f"  Revised: {score}/10 | "
-                        f"Engagement: {engagement_score}/10 | "
-                        f"Publish: {publish}"
+                        f"  Revised quality: "
+                        f"{score:.2f}/10"
                     )
+
+                    print(
+                        f"  Revised engagement: "
+                        f"{engagement_score:.2f}/10"
+                    )
+
+                    print(
+                        f"  Revised publish: "
+                        f"{publish}"
+                    )
+
+            # ---------------------------------------------------------------
+            # FINAL QUALITY GATE
+            # ---------------------------------------------------------------
 
             if (
                 not publish
@@ -1586,13 +3456,18 @@ def main():
             ):
                 print(
                     "  NOT PUBLISHED. "
-                    "Article failed the evidence/quality gate."
+                    "Article failed publication gate."
                 )
 
-                if quality.get("unsupported_claims"):
+                unsupported = quality.get(
+                    "unsupported_claims",
+                    [],
+                )
+
+                if unsupported:
                     print(
                         "  Unsupported claims: "
-                        f"{len(quality['unsupported_claims'])}"
+                        f"{len(unsupported)}"
                     )
 
                 continue
@@ -1601,33 +3476,59 @@ def main():
             # POST-VALIDATION ENRICHMENT
             # ---------------------------------------------------------------
 
-            article = inject_contextual_affiliate_links(
-                article,
-                brief,
-            )
-
-            article = inject_internal_links(
-                article,
-                posted,
-                source_url,
-                brief,
-            )
-
-            article = append_source_attribution(
-                article,
-                source,
-                source_url,
-            )
-
-            article, final_html_issues = validate_and_clean_html(
-                article
-            )
-
-            if final_html_issues:
-                print(
-                    "  NOT PUBLISHED. Final HTML validation failed: "
-                    f"{final_html_issues}"
+            article = (
+                inject_contextual_affiliate_links(
+                    article,
+                    brief,
                 )
+            )
+
+            article = (
+                inject_internal_links(
+                    article,
+                    posted,
+                    source_url,
+                    brief,
+                )
+            )
+
+            article = (
+                append_source_attribution(
+                    article,
+                    source,
+                    source_url,
+                )
+            )
+
+            article, final_html_issues = (
+                validate_and_clean_html(
+                    article
+                )
+            )
+
+            final_content_issues = (
+                final_content_validation(
+                    article,
+                    source_url,
+                )
+            )
+
+            final_issues = (
+                final_html_issues
+                + final_content_issues
+            )
+
+            if final_issues:
+                print(
+                    "  NOT PUBLISHED. "
+                    "Final validation failed:"
+                )
+
+                for issue in final_issues:
+                    print(
+                        f"   - {issue}"
+                    )
+
                 continue
 
             # ---------------------------------------------------------------
@@ -1640,7 +3541,9 @@ def main():
                 article,
             )
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(
+                timezone.utc
+            ).isoformat()
 
             posted.append({
                 "title": headline,
@@ -1650,46 +3553,96 @@ def main():
                 "source": source,
                 "published": published,
                 "published_at": now,
+
                 "quality_score": score,
-                "engagement_score": engagement_score,
-                "editorial_score": topic_score,
-                "article_type": brief.get(
-                    "article_type",
-                    "",
-                ),
-                "search_intent": brief.get(
-                    "search_intent",
-                    "",
-                ),
-                "primary_keyword": brief.get(
-                    "primary_keyword",
-                    "",
-                ),
-                "secondary_keywords": brief.get(
-                    "secondary_keywords",
-                    [],
-                ),
-                "commercial_intent": brief.get(
-                    "commercial_intent",
-                    "",
-                ),
-                "evergreen_potential": brief.get(
-                    "evergreen_potential",
-                    0,
-                ),
-                "evidence_facts": len(
+                "engagement_score":
+                    engagement_score,
+
+                "editorial_score":
+                    topic_score,
+
+                "article_type":
                     brief.get(
-                        "evidence_ledger",
+                        "article_type",
+                        "",
+                    ),
+
+                "search_intent":
+                    brief.get(
+                        "search_intent",
+                        "",
+                    ),
+
+                "primary_keyword":
+                    brief.get(
+                        "primary_keyword",
+                        "",
+                    ),
+
+                "secondary_keywords":
+                    brief.get(
+                        "secondary_keywords",
                         [],
-                    )
-                ),
+                    ),
+
+                "commercial_intent":
+                    brief.get(
+                        "commercial_intent",
+                        "",
+                    ),
+
+                "evergreen_potential":
+                    brief.get(
+                        "evergreen_potential",
+                        0,
+                    ),
+
+                "useful_angle":
+                    brief.get(
+                        "useful_angle",
+                        "",
+                    ),
+
+                "content_gap":
+                    brief.get(
+                        "content_gap",
+                        "",
+                    ),
+
+                "reader_questions":
+                    brief.get(
+                        "reader_questions",
+                        [],
+                    ),
+
+                "hook_strategy":
+                    brief.get(
+                        "hook_strategy",
+                        "",
+                    ),
+
+                "evidence_facts":
+                    len(
+                        brief.get(
+                            "evidence_ledger",
+                            [],
+                        )
+                    ),
             })
 
             posted = posted[-500:]
-            save_posted_history(posted)
 
-            posted_titles.add(headline)
-            posted_links.add(source_url)
+            save_posted_history(
+                posted
+            )
+
+            posted_titles.add(
+                headline
+            )
+
+            posted_links.add(
+                source_url
+            )
 
             published_this_run += 1
 
@@ -1697,14 +3650,22 @@ def main():
 
         except Exception as e:
             print(
-                f"  Failed: {type(e).__name__}: {e}"
+                f"  Failed: "
+                f"{type(e).__name__}: {e}"
             )
+
             continue
 
     print(
-        f"\nDone. Published {published_this_run} article(s)."
+        f"\nDone. Published "
+        f"{published_this_run} article(s)."
     )
 
 
+# ---------------------------------------------------------------------------
+# ENTRY POINT
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     main()
+````
