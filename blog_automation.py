@@ -1,4 +1,3 @@
-````python
 # AIToolNotes Intelligent Blog Automation v5
 #
 # RSS -> source extraction -> editorial intelligence
@@ -3668,4 +3667,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-````
