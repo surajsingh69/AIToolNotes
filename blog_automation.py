@@ -79,6 +79,7 @@ MAX_EDITORIAL_CANDIDATES = 24
 INTERNAL_LINKS_PER_POST = 2
 
 SOURCE_MAX_CHARS = 16000
+MAX_EDITORIAL_SOURCE_CHARS = 9000
 MIN_SOURCE_CHARS = 900
 
 MIN_QUALITY_SCORE = 8.0
@@ -683,6 +684,31 @@ def fetch_source_article_text(
 
 
 # ---------------------------------------------------------------------------
+# EDITORIAL SOURCE COMPACTION
+# ---------------------------------------------------------------------------
+
+def compact_source_for_editorial(
+    source_text,
+    max_chars=MAX_EDITORIAL_SOURCE_CHARS,
+):
+    text = clean_text(source_text)
+
+    if len(text) <= max_chars:
+        return text
+
+    head_chars = int(max_chars * 0.70)
+    tail_chars = max_chars - head_chars
+
+    return (
+        text[:head_chars].rstrip()
+        + "\n\n"
+        + "[...middle of source omitted for token control...]"
+        + "\n\n"
+        + text[-tail_chars:].lstrip()
+    )
+
+
+# ---------------------------------------------------------------------------
 # AI HELPERS
 # ---------------------------------------------------------------------------
 
@@ -974,6 +1000,10 @@ def analyze_story(
             ),
         }
 
+    editorial_source_text = compact_source_for_editorial(
+        source_text
+    )
+
     prompt = f"""
 You are the editorial intelligence layer for AIToolNotes.
 
@@ -990,9 +1020,9 @@ RSS TITLE:
 PUBLISHED:
 {published or "unknown"}
 
-SOURCE TEXT:
+SOURCE TEXT (COMPACTED FOR ANALYSIS):
 <BEGIN_SOURCE>
-{source_text}
+{editorial_source_text}
 <END_SOURCE>
 
 Return ONLY valid JSON.
