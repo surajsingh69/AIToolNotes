@@ -177,5 +177,39 @@
     "article_type": "news_explainer",
     "commercial_intent": "low",
     "evidence_facts": 12
+  },
+  {
+    "title": "How V7’s Context Graph Gives AI Agents Institutional Memory",
+    "original_title": "How V7 gives AI agents institutional memory",
+    "link": "https://openai.com/index/v7",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/09/how-v7s-context-graph-gives-ai-agents.html",
+    "source": "OpenAI",
+    "published": "Mon, 21 Sep 2026 00:00:00 GMT",
+    "published_at": "2026-09-22T10:44:51.505794+00:00",
+    "quality_score": 9.0,
+    "engagement_score": 8.0,
+    "editorial_score": 8.68,
+    "article_type": "news_explainer",
+    "search_intent": "How does V7 give AI agents institutional memory? What is a Context Graph and how does it improve enterprise AI workflows?",
+    "primary_keyword": "AI institutional memory",
+    "secondary_keywords": [
+      "Context Graph",
+      "V7 Go",
+      "GPT-6 Astra",
+      "enterprise AI workflow automation",
+      "graph query benchmark"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain how V7’s Context Graph works, why structured entity graphs outperform raw‑retrieval for enterprise AI, and what the reported performance numbers mean for real‑world finance workflows.",
+    "content_gap": "Existing coverage describes V7’s product launch but does not break down the technical approach of the Context Graph, compare it to traditional retrieval‑augmented generation, or clarify how the benchmark numbers translate to day‑to‑day business impact.",
+    "reader_questions": [
+      "How does a Context Graph store and retrieve business entities for AI agents?",
+      "What performance gains does V7 claim when using GPT‑5.6 vs GPT‑6 models?",
+      "Can the Context Graph reduce hallucinations in enterprise query answering?",
+      "What types of workflows (e.g., deal screening, claims processing) benefit most from institutional memory?"
+    ],
+    "hook_strategy": "Open with a vivid scenario: an AI assistant repeatedly asks for the same fund report because it has no memory, costing time and money. Then introduce V7’s solution.",
+    "evidence_facts": 10
   }
 ]
