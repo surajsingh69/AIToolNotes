@@ -246,5 +246,40 @@
     ],
     "hook_strategy": "Open with the striking fact that ads will soon appear inside AI conversations, a first for a platform that serves 1.2 billion users weekly, and tease the early partner results that show lower CPA and high new‑customer lift.",
     "evidence_facts": 12
+  },
+  {
+    "title": "Beyond Facts: New Tool Checks Source Attribution in LLM Agents",
+    "original_title": "Getting the Source Right, Not Just the Fact: Source-Aware Verification for MCP Agents",
+    "link": "https://huggingface.co/blog/MultiverseComputingCAI/getting-the-source-right-not-just-the-fact-source",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/10/beyond-facts-new-tool-checks-source.html",
+    "source": "Hugging Face",
+    "published": "Tue, 29 Sep 2026 13:07:00 GMT",
+    "published_at": "2026-10-06T12:38:01.463753+00:00",
+    "quality_score": 8.1,
+    "engagement_score": 7.0,
+    "editorial_score": 8.57,
+    "article_type": "news_explainer",
+    "search_intent": "people looking for methods to verify source attribution in LLM agents that use multiple tools, or searching for the ProvenanceGuard paper.",
+    "primary_keyword": "source-aware verification",
+    "secondary_keywords": [
+      "MCP agents",
+      "ProvenanceGuard",
+      "cross-source conflation",
+      "LLM factuality",
+      "tool‑using LLM agents"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain the emerging need for source‑aware verification in multi‑tool LLM agents, walk through how ProvenanceGuard works step‑by‑step, and highlight its early empirical strengths and the practical trade‑offs teams must consider when adopting it.",
+    "content_gap": "Existing coverage explains fact‑checking for LLMs but rarely addresses the separate challenge of confirming that a claim’s cited source matches the tool output actually used—a gap ProvenanceGuard explicitly fills.",
+    "reader_questions": [
+      "What is cross‑source conflation and why does it matter for AI agents?",
+      "How does ProvenanceGuard keep source IDs intact through verification?",
+      "In what ways does ProvenanceGuard differ from existing factuality checkers like RAGAS or MiniCheck?",
+      "What were the benchmark results for ProvenanceGuard versus other checkers?",
+      "How can a development team integrate ProvenanceGuard into their existing MCP workflow?"
+    ],
+    "hook_strategy": "Open with a vivid customer‑support scenario where an AI mistakenly credits the account record for a refund policy that actually lives in a separate policy document, underscoring the real‑world risk of mis‑attribution.",
+    "evidence_facts": 11
   }
 ]
