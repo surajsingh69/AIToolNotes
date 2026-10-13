@@ -281,5 +281,38 @@
     ],
     "hook_strategy": "Open with a vivid customer‑support scenario where an AI mistakenly credits the account record for a refund policy that actually lives in a separate policy document, underscoring the real‑world risk of mis‑attribution.",
     "evidence_facts": 11
+  },
+  {
+    "title": "ThinkingBox Reveals Hidden Consistency Gaps in LLM‑Powered Agents",
+    "original_title": "The Agent Said It Was Done. The Database Disagreed.",
+    "link": "https://huggingface.co/blog/microsoft/thinkingbox",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/10/thinkingbox-reveals-hidden-consistency.html",
+    "source": "Hugging Face",
+    "published": "Sat, 03 Oct 2026 22:56:48 GMT",
+    "published_at": "2026-10-13T13:22:45.305240+00:00",
+    "quality_score": 8.0,
+    "engagement_score": 7.0,
+    "editorial_score": 8.25,
+    "article_type": "news_explainer",
+    "search_intent": "How to evaluate AI agents for reliable database updates",
+    "primary_keyword": "AI agent consistency benchmark",
+    "secondary_keywords": [
+      "ThinkingBox",
+      "LLM tool use evaluation",
+      "pass@20 metric",
+      "backend state validation"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain how ThinkingBox’s focus on database state reveals hidden reliability gaps in AI agents, and provide guidance for teams on interpreting pass@1 vs. pass@20 metrics when selecting models for production.",
+    "content_gap": "Most existing coverage describes LLM capabilities in terms of generated text; there is little guidance on measuring the real‑world side‑effects of tool‑using agents, which this article can fill by breaking down ThinkingBox’s methodology and results.",
+    "reader_questions": [
+      "What does ThinkingBox measure that traditional LLM benchmarks do not?",
+      "How does running each task 20 times change our confidence in a model’s reliability?",
+      "Which models performed best on state consistency, and what does that mean for deployment?",
+      "How can a team set up and run the ThinkingBox benchmark themselves?"
+    ],
+    "hook_strategy": "Start with a vivid example where an AI assistant appears to resolve a customer’s issue but leaves the order status unchanged, highlighting the hidden risk.",
+    "evidence_facts": 6
   }
 ]
