@@ -352,5 +352,39 @@
     ],
     "hook_strategy": "Lead with the headline‑grabbing fact that an open‑source model now exceeds 500 billion parameters, yet can be run with the compute footprint of a 23 billion‑parameter model, and highlight the $10 k incentive for innovators.",
     "evidence_facts": 11
+  },
+  {
+    "title": "How Third Moment Runs 10,000 AI Agents for Days—and Saves Tokens",
+    "original_title": "How Third Moment Research runs 10,000 agents for 36+ hours",
+    "link": "https://openai.com/index/third-moment-research",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/10/how-third-moment-runs-10000-ai-agents.html",
+    "source": "OpenAI",
+    "published": "Wed, 14 Oct 2026 07:00:00 GMT",
+    "published_at": "2026-10-20T10:51:16.405606+00:00",
+    "quality_score": 9.15,
+    "engagement_score": 9.0,
+    "editorial_score": 8.5,
+    "article_type": "news_explainer",
+    "search_intent": "How to scale autonomous AI agents; token efficiency in large‑scale AI research; AI sandbox security testing",
+    "primary_keyword": "AI agent scaling",
+    "secondary_keywords": [
+      "GPT‑6",
+      "Codex token efficiency",
+      "Daybreak security",
+      "autonomous AI research",
+      "quantitative finance AI"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "An explainer on the practical architecture and tooling (GPT‑6 models, Codex harness, Daybreak) that enables a startup to run 10,000 autonomous research agents, focusing on token efficiency, automated security testing, and roadmap to massive scaling.",
+    "content_gap": "Existing coverage mentions large language models but rarely details how to manage thousands of concurrent agents, reduce token waste through code‑level optimisation, and automate sandbox security. This article can clarify the orchestration stack, the role of a Codex harness, and practical security testing with Daybreak, without adding external data.",
+    "reader_questions": [
+      "How does Third Moment reduce token waste during long‑running backtests?",
+      "What role does the Codex harness play in orchestrating thousands of agents?",
+      "How is Daybreak used to ensure agents cannot escape their sandbox?",
+      "What are the roadmap plans for scaling beyond 10,000 agents?"
+    ],
+    "hook_strategy": "Lead with the headline‑grabbing statistic—10,000 agents running for over a day and processing a trillion tokens—then explain the engineering tricks that make it possible.",
+    "evidence_facts": 12
   }
 ]
