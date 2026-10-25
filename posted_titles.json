@@ -420,5 +420,40 @@
     ],
     "hook_strategy": "Open with a common scenario: a researcher discovers a critical paper that invalidates their hypothesis and must quickly reshape their idea, then introduce LitPivot as a solution that makes that pivot systematic and evidence‑backed.",
     "evidence_facts": 12
+  },
+  {
+    "title": "OpenAI’s Decisions API: Faster, Low‑Cost Real‑Time AI Decisions",
+    "original_title": "Build more responsive apps with the Decisions API",
+    "link": "https://openai.com/index/decisions-api",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/10/openais-decisions-api-faster-lowcost.html",
+    "source": "OpenAI",
+    "published": "Thu, 22 Oct 2026 19:00:00 GMT",
+    "published_at": "2026-10-25T10:37:01.777006+00:00",
+    "quality_score": 8.85,
+    "engagement_score": 8.0,
+    "editorial_score": 8.45,
+    "article_type": "news_explainer",
+    "search_intent": "How does OpenAI Decisions API work and how much does it cost?",
+    "primary_keyword": "OpenAI Decisions API",
+    "secondary_keywords": [
+      "GPT-6 Luna",
+      "GPT‑Live integration",
+      "real-time AI decisions",
+      "AI decision latency",
+      "AI pricing input tokens"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain how the Decisions API differs from OpenAI’s standard Responses API, break down its three answer types, detail pricing and regional availability, and illustrate real‑world performance claims through early‑adopter use cases.",
+    "content_gap": "Current coverage mostly repeats the announcement; there is little practical guidance on the API’s answer types, pricing model, latency claims, and how developers can integrate it with GPT‑Live or use it for specific decision‑making patterns.",
+    "reader_questions": [
+      "What answer types does the Decisions API provide?",
+      "How does the Decisions API’s latency compare to the standard Responses API?",
+      "What are the pricing details and token‑only cost model?",
+      "Which regions support inference for the Decisions API?",
+      "How many questions can be sent in a single Decisions API request?"
+    ],
+    "hook_strategy": "Open with a developer’s need for sub‑second decision making in a live chatbot, then show how the newly announced Decisions API promises up to 10× faster responses and lower token costs.",
+    "evidence_facts": 12
   }
 ]
