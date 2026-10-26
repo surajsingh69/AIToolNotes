@@ -455,5 +455,40 @@
     ],
     "hook_strategy": "Open with a developer’s need for sub‑second decision making in a live chatbot, then show how the newly announced Decisions API promises up to 10× faster responses and lower token costs.",
     "evidence_facts": 12
+  },
+  {
+    "title": "IBM Granite Timeseries Ensemble: A No‑Training Way to Get Better Forecasts",
+    "original_title": "Ensemble forecasting with IBM Granite time-series models",
+    "link": "https://huggingface.co/blog/ibm-research/granite-timeseries-ensemble-r1",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/10/ibm-granite-timeseries-ensemble.html",
+    "source": "Hugging Face",
+    "published": "Thu, 22 Oct 2026 07:51:31 GMT",
+    "published_at": "2026-10-26T12:03:06.312598+00:00",
+    "quality_score": 9.15,
+    "engagement_score": 9.0,
+    "editorial_score": 8.35,
+    "article_type": "news_explainer",
+    "search_intent": "How to use IBM Granite Timeseries Ensemble for forecasting; difference between Probabilistic and IQR ensemble methods; evaluating ensemble forecasts.",
+    "primary_keyword": "Granite Timeseries Ensemble",
+    "secondary_keywords": [
+      "IBM Granite",
+      "time series ensemble",
+      "Probabilistic Ensemble",
+      "IQR Ensemble",
+      "quantile forecasting"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain the two ensemble methods, walk through a minimal code example, outline how to evaluate both accuracy and uncertainty, and flag practical limitations and licensing considerations.",
+    "content_gap": "Existing coverage announces the ensemble but lacks step‑by‑step guidance on installation, method selection, evaluation metrics, and operational limitations, leaving practitioners uncertain about real‑world adoption.",
+    "reader_questions": [
+      "What models are included in the default Granite Timeseries Ensemble?",
+      "How do the Probabilistic and IQR ensemble methods differ?",
+      "What is the minimal code required to generate point and quantile forecasts?",
+      "How can I assess whether the ensemble improves accuracy and calibration for my data?",
+      "What limitations should I be aware of before deploying the ensemble?"
+    ],
+    "hook_strategy": "Open with the common pain point of picking a single time‑series model and the risk of mis‑forecasting, then present the ensemble as a ready‑made safety net that removes guesswork.",
+    "evidence_facts": 12
   }
 ]
