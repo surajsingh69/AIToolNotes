@@ -1,0 +1,52 @@
+<!-- Google Analytics 4 -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX', {
+    'page_path': location.pathname + location.search,
+    'page_title': document.title
+  });
+</script>
+<!-- End Google Analytics 4 -->
+
+<!-- UTM Parameter Tracking -->
+<script>
+(function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const utmParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+  const utmData = {};
+  
+  utmParams.forEach(param => {
+    const value = urlParams.get(param);
+    if (value) {
+      utmData[param] = value;
+    }
+  });
+  
+  if (Object.keys(utmData).length > 0) {
+    // Store UTM data in sessionStorage
+    sessionStorage.setItem('utm_data', JSON.stringify({
+      ...utmData,
+      timestamp: Date.now(),
+      referrer: document.referrer
+    }));
+    
+    // Send to GA4 as custom event
+    if (typeof gtag === 'function') {
+      gtag('event', 'utm_landing', {
+        event_category: 'traffic_source',
+        event_label: utmData.utm_source || 'unknown',
+        utm_source: utmData.utm_source || '',
+        utm_medium: utmData.utm_medium || '',
+        utm_campaign: utmData.utm_campaign || '',
+        utm_content: utmData.utm_content || '',
+        utm_term: utmData.utm_term || '',
+        page_path: location.pathname + location.search
+      });
+    }
+  }
+})();
+</script>
+<!-- End UTM Parameter Tracking -->

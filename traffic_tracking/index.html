@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIToolNotes Traffic Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #60a5fa; margin-bottom: 0.5rem; }
+        .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; }
+        .stat-label { color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .stat-value { color: #60a5fa; font-size: 2rem; font-weight: bold; margin-top: 0.5rem; }
+        .platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .platform-card { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; }
+        .platform-name { color: #e2e8f0; font-weight: 600; }
+        .platform-count { color: #60a5fa; font-size: 1.5rem; font-weight: bold; margin-top: 0.25rem; }
+        table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 0.5rem; overflow: hidden; }
+        th { background: #334155; color: #e2e8f0; padding: 0.75rem; text-align: left; font-weight: 600; }
+        td { padding: 0.75rem; border-top: 1px solid #334155; }
+        .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; }
+        .badge-reddit { background: #ff4500; color: white; }
+        .badge-twitter { background: #1da1f2; color: white; }
+        .badge-linkedin { background: #0a66c2; color: white; }
+        .badge-hn { background: #ff6600; color: white; }
+        .badge-other { background: #64748b; color: white; }
+        .actions { margin-top: 2rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+        .btn { padding: 0.75rem 1.5rem; border-radius: 0.5rem; border: none; color: white; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn-primary { background: #3b82f6; }
+        .btn-primary:hover { background: #2563eb; }
+        .last-updated { color: #64748b; font-size: 0.875rem; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 AIToolNotes Traffic Tracker</h1>
+        <p class="subtitle">UTM-tagged link tracking for all platforms • Generated: 2026-11-02 14:02 UTC</p>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total UTM Links</div>
+                <div class="stat-value">3096</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Articles</div>
+                <div class="stat-value">129</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Platforms</div>
+                <div class="stat-value">11</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Subreddits</div>
+                <div class="stat-value">14</div>
+            </div>
+        </div>
+        
+        <h2 style="color: #60a5fa; margin-bottom: 1rem;">Platform Breakdown</h2>
+        <div class="platform-grid">
+        </div>
+        
+        <h2 style="color: #60a5fa; margin: 2rem 0 1rem;">Quick Links</h2>
+        <div class="actions">
+            <a href="utm_links.json" class="btn btn-primary" download>📥 Download All UTM Links (JSON)</a>
+            <a href="sharing_kit.json" class="btn btn-primary" download>📦 Download Sharing Kit (JSON)</a>
+        </div>
+        
+        <div class="actions">
+            <h3 style="color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">Platform Sharing Pages</h3>
+            <a href="platform_reddit.html" class="btn btn-primary">Reddit Links</a>
+            <a href="platform_twitter.html" class="btn btn-primary">Twitter Links</a>
+            <a href="platform_linkedin.html" class="btn btn-primary">Linkedin Links</a>
+            <a href="platform_hackernews.html" class="btn btn-primary">Hackernews Links</a>
+            <a href="platform_quora.html" class="btn btn-primary">Quora Links</a>
+            <a href="platform_pinterest.html" class="btn btn-primary">Pinterest Links</a>
+        </div>
+        
+        <p class="last-updated">Last updated: 2026-11-02 14:02:04 UTC</p>
+    </div>
+</body>
+</html>
