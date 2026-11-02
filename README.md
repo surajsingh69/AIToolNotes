@@ -69,5 +69,3 @@
   accuracy and adding one line of your own take where useful — this is a
   small time cost that meaningfully improves both trustworthiness and
   compliance with Google's content-quality guidance.
-
-- [AIToolNotes](https://aitoolnotes.blogspot.com) - Curated directory of free AI tools with detailed comparisons and guides for students, marketers, developers, and businesses.
