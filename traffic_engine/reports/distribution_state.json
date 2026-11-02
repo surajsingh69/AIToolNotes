@@ -1,0 +1,33 @@
+{
+  "drafted_posts": [
+    {
+      "platform": "reddit",
+      "subreddit": "r/ArtificialIntelligence",
+      "title": "I built a free directory of AI tools tested in 2026 \u2014 no watermarks, no credit cards",
+      "body": "After testing dozens of AI tools, I put together a curated list of the best free ones...\n\nFull comparisons: https://aitoolnotes.blogspot.com/",
+      "requires_approval": true
+    },
+    {
+      "platform": "hacker_news",
+      "title": "Show HN: AIToolNotes \u2013 Free AI Tools Directory with Honest Reviews",
+      "body": "I've been testing free AI tools and publishing honest comparisons...\n\nhttps://aitoolnotes.blogspot.com/",
+      "requires_approval": true
+    }
+  ],
+  "pending_approval": [
+    {
+      "platform": "reddit",
+      "subreddit": "r/ArtificialIntelligence",
+      "title": "I built a free directory of AI tools tested in 2026 \u2014 no watermarks, no credit cards",
+      "body": "After testing dozens of AI tools, I put together a curated list of the best free ones...\n\nFull comparisons: https://aitoolnotes.blogspot.com/",
+      "requires_approval": true
+    },
+    {
+      "platform": "hacker_news",
+      "title": "Show HN: AIToolNotes \u2013 Free AI Tools Directory with Honest Reviews",
+      "body": "I've been testing free AI tools and publishing honest comparisons...\n\nhttps://aitoolnotes.blogspot.com/",
+      "requires_approval": true
+    }
+  ],
+  "timestamp": "2026-11-02T12:08:46.220380Z"
+}

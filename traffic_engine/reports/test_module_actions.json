@@ -1,0 +1,20 @@
+[
+  {
+    "timestamp": "2026-11-02T12:08:40.928727Z",
+    "module": "test_module",
+    "action": "a1",
+    "target": "t1",
+    "status": "success",
+    "details": {},
+    "error": null
+  },
+  {
+    "timestamp": "2026-11-02T12:08:40.928794Z",
+    "module": "test_module",
+    "action": "a2",
+    "target": "t2",
+    "status": "failed",
+    "details": {},
+    "error": null
+  }
+]
