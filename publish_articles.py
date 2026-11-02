@@ -271,6 +271,32 @@ def main():
             "file": BLANK_CONTENT_DIR / "elevenlabs-vs-murf-for-podcasts-voice.md",
             "slug": "elevenlabs-vs-murf-for-podcasts-voice",
         },
+        # 5 additional new articles
+        {
+            "type": "new_article",
+            "file": ARTICLES_DIR / "best-free-ai-voice-generator-2026-top.md",
+            "slug": "best-free-ai-voice-generator-2026-top",
+        },
+        {
+            "type": "new_article",
+            "file": ARTICLES_DIR / "best-free-ai-coding-assistant-2026.md",
+            "slug": "best-free-ai-coding-assistant-2026",
+        },
+        {
+            "type": "new_article",
+            "file": ARTICLES_DIR / "best-free-ai-tools-for-ecommerce-2026.md",
+            "slug": "best-free-ai-tools-for-ecommerce-2026",
+        },
+        {
+            "type": "new_article",
+            "file": ARTICLES_DIR / "best-free-ai-tools-for-content-marketing-2026.md",
+            "slug": "best-free-ai-tools-for-content-marketing-2026",
+        },
+        {
+            "type": "new_article",
+            "file": ARTICLES_DIR / "best-free-ai-tools-for-educators-2026.md",
+            "slug": "best-free-ai-tools-for-educators-2026",
+        },
     ]
     
     results = []
