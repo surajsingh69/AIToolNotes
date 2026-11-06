@@ -565,5 +565,40 @@
     "title": "ElevenLabs vs Murf for Podcasts and Voiceovers",
     "link": "https://aitoolnotes.blogspot.com/2026/10/elevenlabs-vs-murf-for-podcasts-voice.html",
     "post_url": "https://aitoolnotes.blogspot.com/2026/10/elevenlabs-vs-murf-for-podcasts-voice.html"
+  },
+  {
+    "title": "Dharma AI’s Field Extractor Cuts Document Parsing Costs by Up to 147×",
+    "original_title": "Dharma Field Extractor: Any Document In, Structured Fields in JSON Out",
+    "link": "https://huggingface.co/blog/Dharma-AI/dharma-field-extractor",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/11/dharma-ais-field-extractor-cuts.html",
+    "source": "Hugging Face",
+    "published": "Wed, 04 Nov 2026 17:50:10 GMT",
+    "published_at": "2026-11-06T13:35:07.466121+00:00",
+    "quality_score": 8.45,
+    "engagement_score": 8.0,
+    "editorial_score": 8.45,
+    "article_type": "news_explainer",
+    "search_intent": "Looking for AI solutions that turn document images into structured JSON fields, comparing specialized models to general LLM APIs.",
+    "primary_keyword": "field extraction model",
+    "secondary_keywords": [
+      "OCR",
+      "structured JSON",
+      "Dharma Field Extractor",
+      "AI document processing",
+      "LLM cost comparison"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "Explain how a domain‑specialized OCR field‑extraction model can outperform generic LLMs in both accuracy and cost, and guide readers on evaluating whether to adopt a self‑hosted solution versus a managed API.",
+    "content_gap": "Existing coverage explains OCR and general LLM prompting but does not clarify how a purpose‑built field‑extraction model can cut costs and boost accuracy for enterprise document automation.",
+    "reader_questions": [
+      "What is the difference between open and schema‑directed extraction?",
+      "How does the cost of running Dharma Field Extractor compare to using GPT or Claude APIs?",
+      "Which document types and languages does the model support?",
+      "What data was used to train the model and how large was the training set?",
+      "Can I self‑host the model and integrate it into my existing pipeline?"
+    ],
+    "hook_strategy": "Lead with the dramatic cost‑savings (up to 147× cheaper) and the benchmark quality edge, then illustrate with real‑world use cases like invoice line‑item extraction.",
+    "evidence_facts": 12
   }
 ]
