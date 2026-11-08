@@ -600,5 +600,40 @@
     ],
     "hook_strategy": "Lead with the dramatic cost‑savings (up to 147× cheaper) and the benchmark quality edge, then illustrate with real‑world use cases like invoice line‑item extraction.",
     "evidence_facts": 12
+  },
+  {
+    "title": "Google’s Gemini Omni 1.2 Flash Cuts Video Costs 30% and Extends Clips to 15 Seconds",
+    "original_title": "Gemini Omni 1.2 Flash: Fast and cost-effective with longer clips",
+    "link": "https://blog.google/innovation-and-ai/technology/developers-tools/introducing-gemini-omni-1-2-flash/",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/11/googles-gemini-omni-12-flash-cuts-video.html",
+    "source": "Google AI Blog",
+    "published": "Thu, 05 Nov 2026 17:00:00 +0000",
+    "published_at": "2026-11-08T12:32:57.022386+00:00",
+    "quality_score": 8.25,
+    "engagement_score": 7.0,
+    "editorial_score": 8.12,
+    "article_type": "news_explainer",
+    "search_intent": "people looking for details on Google’s Gemini Omni 1.2 Flash features, pricing, and how to use it for short AI‑generated videos.",
+    "primary_keyword": "Gemini Omni 1.2 Flash",
+    "secondary_keywords": [
+      "AI video generation",
+      "multi-turn conversational editing",
+      "AI video pricing",
+      "Google Gemini API",
+      "short video ads"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 6,
+    "useful_angle": "A practical explainer on how the new price, longer duration, and multi‑turn editing change the workflow for short‑form video production, with step‑by‑step guidance on accessing the model via the Gemini API and Google Vids.",
+    "content_gap": "Existing coverage simply repeats the announcement; this article will break down the pricing model, explain multi‑turn editing workflow, and illustrate practical use‑cases for marketers and developers.",
+    "reader_questions": [
+      "What is the maximum video length supported by Gemini Omni 1.2 Flash?",
+      "How much does the new model cost per second of 720p video?",
+      "How does multi‑turn conversational editing work in practice?",
+      "Which Google products give me access to the model?",
+      "What improvements does reference adherence bring to my video consistency?"
+    ],
+    "hook_strategy": "Open with the common pain point of high costs and limited editability in AI video tools, then reveal how Gemini Omni 1.2 Flash promises a 30% cheaper, 15‑second, edit‑friendly solution.",
+    "evidence_facts": 11
   }
 ]
