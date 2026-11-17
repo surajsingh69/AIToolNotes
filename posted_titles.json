@@ -635,5 +635,39 @@
     ],
     "hook_strategy": "Open with the common pain point of high costs and limited editability in AI video tools, then reveal how Gemini Omni 1.2 Flash promises a 30% cheaper, 15‑second, edit‑friendly solution.",
     "evidence_facts": 11
+  },
+  {
+    "title": "Google launches Gemini Decisions API for sub‑second multimodal AI choices",
+    "original_title": "Gemini Decisions API: Fast, calibrated multimodal decisions",
+    "link": "https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/11/google-launches-gemini-decisions-api.html",
+    "source": "Google AI Blog",
+    "published": "Wed, 11 Nov 2026 18:00:00 +0000",
+    "published_at": "2026-11-17T15:14:26.634660+00:00",
+    "quality_score": 8.55,
+    "engagement_score": 8.0,
+    "editorial_score": 8.75,
+    "article_type": "news_explainer",
+    "search_intent": "How to use Gemini Decisions API, Gemini Decision 1 pricing, multimodal AI decision API, fast AI decision making",
+    "primary_keyword": "Gemini Decisions API",
+    "secondary_keywords": [
+      "Gemini Decision 1",
+      "multimodal decision model",
+      "AI decision API pricing",
+      "probabilistic AI choices",
+      "Google AI API"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "A practical explainer that walks developers through the three supported decision types, shows the Python code snippet, breaks down pricing and latency, and compares the offering to existing generative or classification APIs.",
+    "content_gap": "While the announcement lists features and pricing, there is no step‑by‑step guide or clear comparison to other decision‑oriented APIs; an article can fill that gap with practical usage tips, cost calculations, and a concise overview of the three decision primitives.",
+    "reader_questions": [
+      "What modalities can the Gemini Decisions API process in a single request?",
+      "How many questions can be evaluated per call and what is the latency?",
+      "What are the three decision primitive types and how are their results formatted?",
+      "How is the API priced and are there any free‑tier options?"
+    ],
+    "hook_strategy": "Lead with the headline‑grabbing latency (sub‑250 ms) and cost advantage (5× cheaper than a comparable Gemini model), then show a real‑world code example that lets readers try it instantly.",
+    "evidence_facts": 12
   }
 ]
