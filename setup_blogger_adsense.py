@@ -35,7 +35,7 @@ def ensure_trust_pages(
     contact_email: str = "",
 ) -> dict[str, list[str]]:
     """Create missing AdSense-required trust pages on Blogger idempotently."""
-    existing_resp = service.pages().list(blogId=blog_id, status="live").execute()
+    existing_resp = service.pages().list(blogId=blog_id, status="LIVE").execute()
     existing_titles = {
         (p.get("title") or "").strip().lower()
         for p in existing_resp.get("items", [])
@@ -80,12 +80,14 @@ def cleanup_off_topic_posts(
     page_token = None
 
     while True:
-        req = service.posts().list(
-            blogId=blog_id,
-            status="live",
-            maxResults=50,
-            pageToken=page_token,
-        )
+        list_kwargs = {
+            "blogId": blog_id,
+            "status": "LIVE",
+            "maxResults": 50,
+        }
+        if page_token:
+            list_kwargs["pageToken"] = page_token
+        req = service.posts().list(**list_kwargs)
         resp = req.execute()
         for post in resp.get("items", []):
             title = post.get("title", "")

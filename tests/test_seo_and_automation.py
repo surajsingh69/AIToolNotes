@@ -161,6 +161,7 @@ class TestBloggerAdsenseSetup(unittest.TestCase):
             "items": [{"title": "About"}]
         }
         summary = sba.ensure_trust_pages(service, "blog-123", dry_run=False, contact_email="hi@aitoolnotes.com")
+        service.pages().list.assert_called_with(blogId="blog-123", status="LIVE")
         self.assertEqual(summary["skipped"], ["About"])
         self.assertEqual(len(summary["created"]), 3)
         self.assertEqual(service.pages().insert.call_count, 3)
@@ -174,6 +175,7 @@ class TestBloggerAdsenseSetup(unittest.TestCase):
             ]
         }
         reverted = sba.cleanup_off_topic_posts(service, "blog-123", dry_run=False)
+        service.posts().list.assert_called_with(blogId="blog-123", status="LIVE", maxResults=50)
         self.assertEqual(reverted, ["Get ready for the game with new football features in Search"])
         service.posts().revert.assert_called_once_with(blogId="blog-123", postId="1")
 
