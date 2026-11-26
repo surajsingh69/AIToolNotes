@@ -1,0 +1,54 @@
+{
+  "notion": {
+    "url": "",
+    "aliases": ["notion", "notion ai"]
+  },
+  "zapier": {
+    "url": "",
+    "aliases": ["zapier", "zapier ai"]
+  },
+  "grammarly": {
+    "url": "",
+    "aliases": ["grammarly"]
+  },
+  "jasper": {
+    "url": "",
+    "aliases": ["jasper", "jasper ai"]
+  },
+  "elevenlabs": {
+    "url": "",
+    "aliases": ["elevenlabs", "eleven labs"]
+  },
+  "descript": {
+    "url": "",
+    "aliases": ["descript"]
+  },
+  "murf": {
+    "url": "",
+    "aliases": ["murf", "murf ai"]
+  },
+  "synthesia": {
+    "url": "",
+    "aliases": ["synthesia", "synthesia ai"]
+  },
+  "customgpt": {
+    "url": "",
+    "aliases": ["customgpt", "custom gpt", "custom gpts"]
+  },
+  "writesonic": {
+    "url": "",
+    "aliases": ["writesonic"]
+  },
+  "copyai": {
+    "url": "",
+    "aliases": ["copy.ai", "copy ai"]
+  },
+  "semrush": {
+    "url": "",
+    "aliases": ["semrush"]
+  },
+  "surfer": {
+    "url": "",
+    "aliases": ["surfer seo", "surferseo"]
+  }
+}

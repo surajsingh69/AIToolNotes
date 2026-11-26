@@ -4,8 +4,25 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 6 * * *"
-  workflow_dispatch: {}
+    # Run twice daily for fresh AI tool coverage without spam-level volume.
+    - cron: "0 6,18 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run without publishing to Blogger or updating posted_titles.json"
+        required: false
+        default: false
+        type: boolean
+      max_posts:
+        description: "Maximum posts to publish this run"
+        required: false
+        default: "2"
+        type: string
+      setup_adsense_pages:
+        description: "Create missing AdSense trust pages & revert off-topic posts to draft"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   post:
@@ -22,7 +39,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
       - name: Recreate credential files from secrets
+        if: ${{ !inputs.dry_run }}
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
@@ -30,13 +51,40 @@ jobs:
           printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials.json
           printf '%s' "$GOOGLE_TOKEN_JSON" > token.json
 
+      - name: Setup Blogger AdSense trust pages & cleanup (optional)
+        if: ${{ !inputs.dry_run && inputs.setup_adsense_pages }}
+        env:
+          BLOG_ID: ${{ secrets.BLOG_ID }}
+          CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+        run: python setup_blogger_adsense.py --cleanup-offtopic
+
       - name: Run blog automation
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-        run: python blog_automation.py
+          MAX_POSTS_PER_RUN: ${{ inputs.max_posts || '2' }}
+          AFFILIATE_NOTION_URL: ${{ secrets.AFFILIATE_NOTION_URL }}
+          AFFILIATE_JASPER_URL: ${{ secrets.AFFILIATE_JASPER_URL }}
+          AFFILIATE_MURF_URL: ${{ secrets.AFFILIATE_MURF_URL }}
+          AFFILIATE_SYNTHESIA_URL: ${{ secrets.AFFILIATE_SYNTHESIA_URL }}
+          AFFILIATE_CUSTOMGPT_URL: ${{ secrets.AFFILIATE_CUSTOMGPT_URL }}
+          AFFILIATE_ZAPIER_URL: ${{ secrets.AFFILIATE_ZAPIER_URL }}
+          AFFILIATE_GRAMMARLY_URL: ${{ secrets.AFFILIATE_GRAMMARLY_URL }}
+          AFFILIATE_ELEVENLABS_URL: ${{ secrets.AFFILIATE_ELEVENLABS_URL }}
+          AFFILIATE_DESCRIPT_URL: ${{ secrets.AFFILIATE_DESCRIPT_URL }}
+          AFFILIATE_WRITESONIC_URL: ${{ secrets.AFFILIATE_WRITESONIC_URL }}
+          AFFILIATE_COPYAI_URL: ${{ secrets.AFFILIATE_COPYAI_URL }}
+          AFFILIATE_SEMRUSH_URL: ${{ secrets.AFFILIATE_SEMRUSH_URL }}
+          AFFILIATE_SURFER_URL: ${{ secrets.AFFILIATE_SURFER_URL }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python blog_automation.py --dry-run --max-posts "${MAX_POSTS_PER_RUN}"
+          else
+            python blog_automation.py --max-posts "${MAX_POSTS_PER_RUN}"
+          fi
 
       - name: Commit updated posted_titles.json
+        if: ${{ !inputs.dry_run }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

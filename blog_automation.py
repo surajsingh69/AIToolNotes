@@ -32,6 +32,7 @@
 #   AFFILIATE_SYNTHESIA_URL
 #   AFFILIATE_CUSTOMGPT_URL
 
+import argparse
 import os
 import json
 import requests
@@ -41,6 +42,7 @@ import difflib
 import html
 import xml.etree.ElementTree as ET
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -52,13 +54,25 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+from seo_utils import (
+    CURATED_AI_TOOL_SOURCES,
+    append_affiliate_disclosure,
+    build_blogger_labels,
+    collect_keyword_suggestions,
+    inject_contextual_inbody_links,
+    is_off_topic_candidate,
+    load_affiliate_config,
+    pre_score_candidate,
+    seo_headline_score,
+)
+
 
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
 
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-BLOG_ID = os.environ["BLOG_ID"]
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+BLOG_ID = os.getenv("BLOG_ID", "").strip()
 
 SCOPES = [
     "https://www.googleapis.com/auth/blogger"
@@ -70,13 +84,13 @@ POSTED_FILE = os.path.join(BASE_DIR, "posted_titles.json")
 TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
 CREDS_FILE = os.path.join(BASE_DIR, "credentials.json")
 
-MAX_POSTS_PER_RUN = 2
+MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "3"))
 
 # Evaluate more stories before selecting winners.
-RAW_CANDIDATE_LIMIT = 40
+RAW_CANDIDATE_LIMIT = 50
 MAX_EDITORIAL_CANDIDATES = 24
 
-INTERNAL_LINKS_PER_POST = 2
+INTERNAL_LINKS_PER_POST = 3
 
 SOURCE_MAX_CHARS = 16000
 MAX_EDITORIAL_SOURCE_CHARS = 9000
@@ -88,68 +102,47 @@ MIN_EDITORIAL_SCORE = 6.5
 
 MAX_REWRITE_ATTEMPTS = 1
 
+# Deterministic pre-filter caps how many candidates reach expensive
+# editorial AI calls. MAX_EDITORIAL_CANDIDATES stays as the older/looser
+# cap used elsewhere; this is a stricter AI-call budget on top of it.
+MAX_AI_EDITORIAL_CANDIDATES = 10
+
 MAX_SOURCE_FACTS = 12
 MAX_EVIDENCE_CHARS_PER_FACT = 300
 
-MAX_ARTICLE_WORDS = 1100
-MIN_ARTICLE_WORDS = 500
+MAX_ARTICLE_WORDS = 1600
+MIN_ARTICLE_WORDS = 650
 
-MAX_REVISION_ARTICLE_CHARS = 18000
+MAX_REVISION_ARTICLE_CHARS = 7500
 
-AFFILIATE_LINKS = {
-    "notion": os.getenv("AFFILIATE_NOTION_URL", "").strip(),
-    "jasper": os.getenv("AFFILIATE_JASPER_URL", "").strip(),
-    "murf": os.getenv("AFFILIATE_MURF_URL", "").strip(),
-    "synthesia": os.getenv("AFFILIATE_SYNTHESIA_URL", "").strip(),
-    "customgpt": os.getenv("AFFILIATE_CUSTOMGPT_URL", "").strip(),
+_ENV_AFFILIATE_ALIASES = {
+    "notion": ["notion", "notion ai"],
+    "jasper": ["jasper", "jasper ai"],
+    "murf": ["murf", "murf ai"],
+    "synthesia": ["synthesia", "synthesia ai"],
+    "customgpt": ["customgpt", "custom gpt", "custom gpts"],
+    "zapier": ["zapier", "zapier ai"],
+    "grammarly": ["grammarly"],
+    "elevenlabs": ["elevenlabs", "eleven labs"],
+    "descript": ["descript"],
+    "writesonic": ["writesonic"],
+    "copyai": ["copy.ai", "copy ai"],
+    "semrush": ["semrush"],
+    "surfer": ["surfer seo", "surferseo"],
 }
 
-# Matching aliases for contextual affiliate placement.
-AFFILIATE_ALIASES = {
-    "notion": [
-        "notion"
-    ],
-    "jasper": [
-        "jasper",
-        "jasper ai"
-    ],
-    "murf": [
-        "murf",
-        "murf ai"
-    ],
-    "synthesia": [
-        "synthesia",
-        "synthesia ai"
-    ],
-    "customgpt": [
-        "customgpt",
-        "custom gpt",
-        "custom gpts",
-    ],
+_ENV_AFFILIATE_LINKS = {
+    key: os.getenv(f"AFFILIATE_{key.upper()}_URL", "").strip()
+    for key in _ENV_AFFILIATE_ALIASES
 }
 
-AI_TOOL_SOURCES = [
-    (
-        "https://www.producthunt.com/feed?category=artificial-intelligence",
-        "Product Hunt AI",
-    ),
-    (
-        "https://openai.com/news/rss.xml",
-        "OpenAI",
-    ),
-    (
-        "https://blog.google/technology/ai/rss/",
-        "Google AI Blog",
-    ),
-    (
-        "https://huggingface.co/blog/feed.xml",
-        "Hugging Face",
-    ),
-    (
-        "https://techcrunch.com/tag/artificial-intelligence/feed/",
-        "TechCrunch AI",
-    ),
-]
+AFFILIATE_LINKS, AFFILIATE_ALIASES = load_affiliate_config(
+    BASE_DIR,
+    _ENV_AFFILIATE_LINKS,
+    _ENV_AFFILIATE_ALIASES,
+)
+
+AI_TOOL_SOURCES = CURATED_AI_TOOL_SOURCES
 
 HEADERS = {
     "User-Agent": (
@@ -158,7 +151,17 @@ HEADERS = {
     )
 }
 
-client = Groq(api_key=GROQ_API_KEY)
+client = None
+
+
+def get_groq_client():
+    global client
+    if client is None:
+        api_key = GROQ_API_KEY or os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY environment variable is required.")
+        client = Groq(api_key=api_key)
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +181,12 @@ def get_blogger_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if os.getenv("CI", "").lower() == "true" or os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+                raise RuntimeError(
+                    "Blogger OAuth token is missing or expired in CI. "
+                    "Refresh token.json locally and update GOOGLE_TOKEN_JSON secret "
+                    "(and publish your Google Cloud OAuth consent screen to Production so tokens do not expire every 7 days)."
+                )
             flow = InstalledAppFlow.from_client_secrets_file(
                 CREDS_FILE,
                 SCOPES,
@@ -244,14 +253,15 @@ def keyword_tokens(text):
 # RSS
 # ---------------------------------------------------------------------------
 
-def get_rss_items(url, source, limit=10):
+def get_rss_items(url, source, limit=10, quiet=False):
     out = []
+    status_msg = ""
 
     try:
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=20,
+            timeout=15,
         )
         response.raise_for_status()
 
@@ -301,6 +311,20 @@ def get_rss_items(url, source, limit=10):
                         ns,
                     )
                 )
+
+                if title and len(title) <= 15:
+                    raw_summary = (
+                        entry.findtext("atom:summary", "", ns)
+                        or entry.findtext("atom:content", "", ns)
+                    )
+                    if raw_summary:
+                        summary_text = clean_text(
+                            BeautifulSoup(raw_summary, "html.parser").get_text(" ", strip=True)
+                        )
+                        # Remove trailing boilerplate links like "Discussion | Link".
+                        summary_text = re.split(r"\bDiscussion\s*\|\s*Link\b", summary_text, maxsplit=1)[0].strip()
+                        if summary_text:
+                            title = f"{title} — {summary_text[:90]}"
 
                 published = (
                     clean_text(
@@ -363,14 +387,13 @@ def get_rss_items(url, source, limit=10):
                         "published": published,
                     })
 
-        print(
-            f"  Got {len(out)} from {source}"
-        )
+        status_msg = f"  Got {len(out)} from {source}"
 
     except Exception as e:
-        print(
-            f"  {source} RSS failed: {e}"
-        )
+        status_msg = f"  {source} RSS failed: {e}"
+
+    if not quiet and status_msg:
+        print(status_msg)
 
     return out
 
@@ -382,14 +405,15 @@ def collect_topics():
 
     topics = []
 
-    for url, source in AI_TOOL_SOURCES:
-        topics.extend(
-            get_rss_items(
-                url,
-                source,
-                limit=10,
-            )
-        )
+    def _fetch_one(src):
+        url, source = src
+        items = get_rss_items(url, source, limit=10, quiet=True)
+        return source, items
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for source, items in executor.map(_fetch_one, AI_TOOL_SOURCES):
+            print(f"  Got {len(items)} from {source}")
+            topics.extend(items)
 
     print(
         f"\nTotal raw topics: {len(topics)}"
@@ -747,11 +771,21 @@ def extract_json_object(text):
 
 
 def call_ai(messages, max_tokens):
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        max_tokens=max_tokens,
-        messages=messages,
-    )
+    for attempt in range(2):
+        try:
+            response = get_groq_client().chat.completions.create(
+                model="openai/gpt-oss-120b",
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            break
+        except Exception as exc:
+            err_str = str(exc)
+            if attempt == 0 and ("429" in err_str or "rate_limit" in err_str.lower()):
+                print("  Groq TPM limit reached; waiting 20s before retry...")
+                time.sleep(20)
+                continue
+            raise
 
     choice = response.choices[0]
 
@@ -959,19 +993,39 @@ def calculate_editorial_score(
     )
 
     evidence_bonus = min(
-        evidence_count / 12 * 1.0,
-        1.0,
+        evidence_count / 12 * 0.8,
+        0.8,
     )
 
+    article_type = clean_text(
+        brief.get("article_type", "")
+    )
+    evergreen_types = {
+        "practical_guide",
+        "tool_review",
+        "comparison",
+        "roundup",
+    }
+    format_bonus = 0.4 if article_type in evergreen_types else 0.0
+
+    commercial_intent = clean_text(
+        brief.get("commercial_intent", "")
+    ).lower()
+    if commercial_intent == "high":
+        format_bonus += 0.3
+    elif commercial_intent == "medium":
+        format_bonus += 0.15
+
     score = (
-        reader_value * 0.25
-        + novelty * 0.15
-        + search_value * 0.15
-        + commercial_relevance * 0.10
-        + source_strength * 0.15
+        reader_value * 0.22
+        + novelty * 0.12
+        + search_value * 0.20
+        + commercial_relevance * 0.16
+        + source_strength * 0.12
         + content_depth * 0.10
-        + freshness * 0.10
+        + freshness * 0.08
         + evidence_bonus
+        + format_bonus
     )
 
     return round(
@@ -989,6 +1043,7 @@ def analyze_story(
     source_name,
     source_text,
     published="",
+    google_suggestions=None,
 ):
     if len(source_text) < MIN_SOURCE_CHARS:
         return {
@@ -1003,6 +1058,15 @@ def analyze_story(
     editorial_source_text = compact_source_for_editorial(
         source_text
     )
+
+    suggestions_block = ""
+    if google_suggestions:
+        suggestions_block = (
+            "\nGOOGLE AUTOCOMPLETE SEARCH QUERIES "
+            "(use only if factually supported by the source):\n"
+            + json.dumps(google_suggestions[:8], ensure_ascii=False)
+            + "\n"
+        )
 
     prompt = f"""
 You are the editorial intelligence layer for AIToolNotes.
@@ -1019,7 +1083,7 @@ RSS TITLE:
 
 PUBLISHED:
 {published or "unknown"}
-
+{suggestions_block}
 SOURCE TEXT (COMPACTED FOR ANALYSIS):
 <BEGIN_SOURCE>
 {editorial_source_text}
@@ -1163,7 +1227,7 @@ Rules:
                     "content": prompt,
                 },
             ],
-            5000,
+            4500,
         )
     )
 
@@ -1571,65 +1635,7 @@ def headline_candidate_score(
     headline,
     brief,
 ):
-    headline = clean_text(
-        headline
-    )
-
-    if not headline:
-        return -999
-
-    score = 0.0
-
-    length = len(headline)
-
-    if length <= 60:
-        score += 2.0
-    elif length <= 70:
-        score += 1.5
-    elif length <= 85:
-        score += 0.5
-    elif length > 100:
-        score -= 3.0
-
-    keyword = clean_text(
-        brief.get(
-            "primary_keyword",
-            "",
-        )
-    ).lower()
-
-    if keyword and keyword in headline.lower():
-        score += 2.0
-
-    tokens = keyword_tokens(
-        headline
-    )
-
-    if len(tokens) >= 5:
-        score += 1.0
-
-    # Avoid obvious clickbait.
-    banned = [
-        "shocking",
-        "you won't believe",
-        "insane",
-        "game-changing",
-        "revolutionary",
-        "guaranteed",
-        "secret",
-        "destroy",
-        "finally!",
-    ]
-
-    for phrase in banned:
-        if phrase in headline.lower():
-            score -= 3.0
-
-    # Avoid unnecessary punctuation.
-    if headline.count("!") > 0:
-        score -= 1.0
-
-    return score
+    return seo_headline_score(headline, brief)
 
 
 def choose_headline(
@@ -1708,7 +1714,7 @@ def generate_article(
         revision_block = f"""
 QUALITY REVIEW TO FIX:
 
-{revision_feedback[:4000]}
+{revision_feedback[:1800]}
 """
 
     previous_article_block = ""
@@ -1779,52 +1785,61 @@ ARTICLE REQUIREMENTS:
 
 5. Use H2/H3 where useful.
 
-6. The first paragraph must immediately explain
-   what happened and why it matters.
+6. The first paragraph must immediately answer what the tool/update does,
+   who it is for, and why it matters (optimized for featured snippets).
 
-7. Never use generic AI openings.
+7. Include a short <h2>Key Takeaways</h2><ul>...</ul> summary right
+   after the opening paragraph.
 
-8. Do not merely rewrite the source chronologically.
+8. Never use generic AI openings or fluff transitions.
 
-9. Explain unfamiliar terms plainly.
+9. Do not merely rewrite the source chronologically; organize by reader
+   search intent (capabilities, workflow/use cases, pricing/availability if
+   stated, limitations or missing context, and next steps).
 
-10. Answer the reader's likely questions.
+10. Explain unfamiliar technical terms plainly.
 
-11. Use short paragraphs.
+11. Answer the verified reader_questions from the brief—if 2 or more
+    questions can be answered strictly from supplied evidence, add an
+    <h2>Frequently Asked Questions</h2> section with <h3> questions.
+    Never invent answers for unanswered questions.
 
-12. Use lists or tables only when they improve clarity.
+12. Use short paragraphs (2-4 sentences) for high mobile readability and
+    clean ad-layout spacing.
 
-13. Do not invent instructions.
+13. Include a structured <table> (such as capabilities, specs, tiers, or
+    comparisons) whenever concrete specs, tiers, or comparisons exist in the
+    source.
 
-14. Do not claim personal testing.
+14. Do not invent instructions, prices, or benchmarks.
 
-15. Do not fabricate quotes.
+15. Do not claim personal testing.
 
-16. Do not repeat facts unnecessarily.
+16. Do not fabricate quotes.
 
-17. Do not pad the article.
+17. Do not repeat facts unnecessarily or pad the article.
 
-18. Target {MIN_ARTICLE_WORDS}-{MAX_ARTICLE_WORDS}
+18. Target {MIN_ARTICLE_WORDS}-{MAX_ARTICLE_WORDS} words
     only when the evidence supports that length.
 
-19. End with a concrete takeaway.
+19. Include a brief section or bullet points on Limitations / What Is Still
+    Unclear based strictly on missing_context and source boundaries.
 
-20. Use the primary keyword naturally.
+20. End with a concrete takeaway for readers deciding whether to adopt it.
 
-21. Never keyword-stuff.
+21. Use the primary keyword naturally in the intro and at least one H2,
+    and weave secondary keywords naturally without stuffing.
 
-22. Attribute promotional claims.
+22. Attribute promotional claims and avoid unsupported superlatives.
 
-23. Do not use unsupported superlatives.
-
-24. Do not create a fake FAQ.
-
-25. Every factual claim must trace to the verified
+23. Every factual claim must trace to the verified
     evidence ledger or supplied source passages.
 
-26. If information is not supported, omit it.
+24. If information is not supported, omit it.
 
 """
+
+    output_budget = 3200 if previous_article else 4000
 
     raw = call_ai(
         [
@@ -1841,7 +1856,7 @@ ARTICLE REQUIREMENTS:
                 "content": prompt,
             },
         ],
-        6000,
+        output_budget,
     )
 
     raw = re.sub(
@@ -1941,15 +1956,15 @@ def validate_and_clean_html(content):
     ):
         comment.extract()
 
-    # Remove H1.
+    # Demote accidental H1 headings to H2 instead of deleting heading text.
     for h1 in soup.find_all("h1"):
-        h1.decompose()
+        h1.name = "h2"
 
-        issues.append(
-            "Removed H1 heading."
-        )
-
-    # Remove unsupported tags.
+    # Unwrap unsupported tags; only flag genuinely unexpected tags outside benign wrappers.
+    benign_wrappers = {
+        "html", "head", "body", "div", "span", "section",
+        "article", "header", "footer", "main", "figure", "figcaption",
+    }
     for tag in list(
         soup.find_all(True)
     ):
@@ -1958,9 +1973,10 @@ def validate_and_clean_html(content):
         if name not in ALLOWED_TAGS:
             tag.unwrap()
 
-            issues.append(
-                f"Removed unsupported HTML tag: {name}"
-            )
+            if name not in benign_wrappers:
+                issues.append(
+                    f"Removed unsupported HTML tag: {name}"
+                )
 
     # Remove dangerous attributes.
     for tag in soup.find_all(True):
@@ -2184,7 +2200,7 @@ def quality_check(
 
     article_excerpt = (
         article_html or ""
-    )[:18000]
+    )[:11000]
 
     prompt = f"""
 You are the final evidence, quality,
@@ -2306,7 +2322,7 @@ Rules:
                     "content": prompt,
                 },
             ],
-            3500,
+            3000,
         )
     )
 
@@ -2619,7 +2635,11 @@ def inject_contextual_affiliate_links(
         if injected:
             continue
 
-    return str(soup)
+    result_html = str(soup)
+    has_sponsored = 'sponsored' in result_html.lower() and any(
+        url and url in result_html for url in AFFILIATE_LINKS.values()
+    )
+    return append_affiliate_disclosure(result_html, has_sponsored)
 
 
 # ---------------------------------------------------------------------------
@@ -2802,6 +2822,12 @@ def inject_internal_links(
     if not picks:
         return content
 
+    enriched = inject_contextual_inbody_links(
+        content,
+        picks,
+        max_inbody=1,
+    )
+
     links_html = ""
 
     for candidate in picks:
@@ -2822,8 +2848,8 @@ def inject_internal_links(
         )
 
     return (
-        content
-        + "<h2>Related reading</h2>"
+        enriched
+        + "<h2>Related AI Tool Guides</h2>"
         + f"<ul>{links_html}</ul>"
     )
 
@@ -2946,16 +2972,25 @@ def post_to_blogger(
     service,
     title,
     content,
+    labels=None,
 ):
+    blog_id = BLOG_ID or os.getenv("BLOG_ID", "").strip()
+    if not blog_id:
+        raise RuntimeError("BLOG_ID environment variable is required.")
+
+    body = {
+        "kind": "blogger#post",
+        "title": title,
+        "content": content,
+    }
+    if labels:
+        body["labels"] = labels
+
     result = (
         service.posts()
         .insert(
-            blogId=BLOG_ID,
-            body={
-                "kind": "blogger#post",
-                "title": title,
-                "content": content,
-            },
+            blogId=blog_id,
+            body=body,
             isDraft=False,
         )
         .execute()
@@ -3023,7 +3058,7 @@ def build_candidate_pool(
     posted_links,
 ):
     seen_titles = set()
-    pool = []
+    scored_pool = []
 
     for topic in all_topics:
         title = clean_text(
@@ -3055,56 +3090,84 @@ def build_candidate_pool(
         ):
             continue
 
-        # Avoid obvious RSS junk.
-        lowered = title.lower()
+        if is_off_topic_candidate(title, link):
+            continue
 
-        junk_patterns = [
-            "subscribe",
-            "newsletter",
-            "podcast episode",
-            "weekly roundup",
-            "job opening",
-        ]
-
-        if any(
-            pattern in lowered
-            for pattern in junk_patterns
-        ):
+        pre_score = pre_score_candidate(
+            topic,
+            freshness_score,
+            AFFILIATE_ALIASES,
+        )
+        if pre_score < 0:
             continue
 
         seen_titles.add(title)
+        topic_with_score = dict(topic)
+        topic_with_score["pre_score"] = pre_score
+        scored_pool.append(topic_with_score)
 
-        pool.append(topic)
+    scored_pool.sort(
+        key=lambda item: item.get("pre_score", 0.0),
+        reverse=True,
+    )
 
-        if len(pool) >= RAW_CANDIDATE_LIMIT:
-            break
+    return scored_pool[:RAW_CANDIDATE_LIMIT]
 
-    return pool
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="AIToolNotes SEO-focused blog automation"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run selection/generation without publishing to Blogger or updating posted_titles.json.",
+    )
+    parser.add_argument(
+        "--max-posts",
+        type=int,
+        default=MAX_POSTS_PER_RUN,
+        help="Maximum posts to publish/generate per run.",
+    )
+    parser.add_argument(
+        "--no-google-suggest",
+        action="store_true",
+        help="Disable Google Autocomplete keyword lookup.",
+    )
+    return parser.parse_args(argv)
 
 
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 
-def main():
+def main(argv=None):
+    args = parse_args(argv)
+    max_posts = max(1, args.max_posts)
+    has_groq = bool(GROQ_API_KEY or os.getenv("GROQ_API_KEY", "").strip())
+
     print(
-        "AIToolNotes Intelligent Blog Automation v5 Starting..."
+        "AIToolNotes SEO & Monetization Automation v6 Starting..."
     )
 
     print(
-        "Mode: RSS -> source -> editorial intelligence -> "
-        "verified evidence -> writer -> quality gate -> "
-        "revision -> enrichment -> Blogger"
+        "Mode: RSS -> Niche & SEO Pre-Filter -> Google Suggest -> "
+        "Editorial Intelligence -> Verified Evidence -> Writer -> "
+        "Quality Gate -> Enrichment & Labels -> Blogger"
+        + (" [DRY RUN]" if args.dry_run else "")
     )
 
     posted = load_posted_history()
 
-    posted_titles = {
-        p.get("title")
-        for p in posted
-        if isinstance(p, dict)
-        and p.get("title")
-    }
+    posted_titles = set()
+    for p in posted:
+        if isinstance(p, dict):
+            if p.get("title"):
+                posted_titles.add(p["title"])
+            if p.get("original_title"):
+                posted_titles.add(p["original_title"])
+        elif isinstance(p, str):
+            posted_titles.add(p)
 
     posted_links = {
         p.get("link")
@@ -3113,13 +3176,7 @@ def main():
         and p.get("link")
     }
 
-    posted_titles.update(
-        p
-        for p in posted
-        if isinstance(p, str)
-    )
-
-    service = get_blogger_service()
+    service = None if args.dry_run else get_blogger_service()
 
     all_topics = collect_topics()
 
@@ -3130,19 +3187,27 @@ def main():
     )
 
     print(
-        f"\nCandidate pool: {len(candidate_pool)}"
+        f"\nCandidate pool (niche-filtered & SEO-ranked): {len(candidate_pool)}"
     )
+
+    if args.dry_run and not has_groq:
+        print("\n[DRY RUN] GROQ_API_KEY not set; printing top pre-scored SEO candidates:")
+        for idx, item in enumerate(candidate_pool[:MAX_AI_EDITORIAL_CANDIDATES], 1):
+            print(
+                f"  {idx}. [{item.get('pre_score', 0):.2f}] "
+                f"({item.get('source', '')}) {item.get('title', '')[:90]}"
+            )
+        return
 
     # -----------------------------------------------------------------------
     # SOURCE VALIDATION + EDITORIAL INTELLIGENCE
     # -----------------------------------------------------------------------
 
     analyzed_candidates = []
+    eval_limit = min(len(candidate_pool), MAX_AI_EDITORIAL_CANDIDATES)
 
     for index, topic_data in enumerate(
-        candidate_pool[
-            :MAX_EDITORIAL_CANDIDATES
-        ],
+        candidate_pool[:MAX_AI_EDITORIAL_CANDIDATES],
         1,
     ):
         title = topic_data[
@@ -3160,8 +3225,8 @@ def main():
         )
 
         print(
-            f"\nEvaluating "
-            f"{index}/{min(len(candidate_pool), MAX_EDITORIAL_CANDIDATES)}:"
+            f"\nEvaluating {index}/{eval_limit} "
+            f"(pre-score {topic_data.get('pre_score', 0):.2f}):"
         )
 
         print(
@@ -3181,6 +3246,15 @@ def main():
             )
             continue
 
+        google_suggestions = collect_keyword_suggestions(
+            title,
+            enable_network=not args.no_google_suggest,
+        )
+        if google_suggestions:
+            print(
+                f"  Google Suggest hints: {len(google_suggestions)}"
+            )
+
         try:
             brief = analyze_story(
                 title,
@@ -3189,6 +3263,7 @@ def main():
                 ],
                 source_text,
                 published,
+                google_suggestions=google_suggestions,
             )
 
         except Exception as e:
@@ -3264,7 +3339,7 @@ def main():
     )
 
     usable_topics = analyzed_candidates[
-        :MAX_POSTS_PER_RUN
+        :max_posts
     ]
 
     print(
@@ -3564,10 +3639,30 @@ def main():
             # PUBLISH
             # ---------------------------------------------------------------
 
+            labels = build_blogger_labels(
+                brief,
+                source,
+            )
+
+            if args.dry_run:
+                print(
+                    f"  [DRY RUN] Ready to publish: {headline}"
+                )
+                print(
+                    f"  [DRY RUN] Labels: {labels}"
+                )
+                print(
+                    f"  [DRY RUN] Final word count: "
+                    f"{count_words_from_html(article)}"
+                )
+                published_this_run += 1
+                continue
+
             _, post_url = post_to_blogger(
                 service,
                 headline,
                 article,
+                labels=labels,
             )
 
             now = datetime.now(
@@ -3580,6 +3675,7 @@ def main():
                 "link": source_url,
                 "post_url": post_url,
                 "source": source,
+                "labels": labels,
                 "published": published,
                 "published_at": now,
 
@@ -3667,6 +3763,9 @@ def main():
 
             posted_titles.add(
                 headline
+            )
+            posted_titles.add(
+                original_title
             )
 
             posted_links.add(
