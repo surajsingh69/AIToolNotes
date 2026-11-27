@@ -669,5 +669,46 @@
     ],
     "hook_strategy": "Lead with the headline‑grabbing latency (sub‑250 ms) and cost advantage (5× cheaper than a comparable Gemini model), then show a real‑world code example that lets readers try it instantly.",
     "evidence_facts": 12
+  },
+  {
+    "title": "The 2027 Best Document Management Software: AI, Automation & Security Ranked",
+    "original_title": "The best document management software in 2027",
+    "link": "https://zapier.com/blog/best-document-management-software",
+    "post_url": "https://aitoolnotes.blogspot.com/2026/11/the-2027-best-document-management.html",
+    "source": "Zapier AI",
+    "labels": [
+      "AI Tool Roundups",
+      "Best Document Management Software 2027",
+      "Document Management System",
+      "AI document management",
+      "Document Management Pricing"
+    ],
+    "published": "Wed, 25 Nov 2026 04:00:00 GMT",
+    "published_at": "2026-11-27T01:41:25.810909+00:00",
+    "quality_score": 8.0,
+    "engagement_score": 7.0,
+    "editorial_score": 8.36,
+    "article_type": "roundup",
+    "search_intent": "Informational – users searching for the best document management software in 2027 and comparisons of features, pricing and use cases.",
+    "primary_keyword": "best document management software 2027",
+    "secondary_keywords": [
+      "document management system",
+      "AI document management",
+      "document management pricing",
+      "DMS security compliance"
+    ],
+    "commercial_intent": "low",
+    "evergreen_potential": 7,
+    "useful_angle": "A practical roundup that helps decision‑makers compare DMS options across automation, AI, security and price, with clear pros/cons and real‑world use quotes.",
+    "content_gap": "Existing coverage often lists tools without explaining the evaluation criteria; this article can clarify what workflow automation, AI, security and usability mean in practice and map each tool to those criteria.",
+    "reader_questions": [
+      "Which DMS offers the most robust AI‑driven automation for document routing?",
+      "What are the price differences between entry‑level and enterprise DMS solutions?",
+      "How do security‑focused DMS ensure regulatory compliance?",
+      "Can a DMS integrate with the tools my team already uses (e.g., CRM, ERP)?",
+      "Which DMS is easiest for non‑technical staff to adopt?"
+    ],
+    "hook_strategy": "Open with a vivid example of how manual document handling wastes hours and introduces risk, then promise a curated list that eliminates guesswork.",
+    "evidence_facts": 12
   }
 ]
